@@ -1,4 +1,4 @@
-﻿import copy
+import copy
 import json
 import os
 import re
@@ -10,7 +10,7 @@ import pyqtgraph as pg
 from nptdms import ChannelObject, GroupObject, RootObject, TdmsFile, TdmsWriter
 from qtpy import QtCore, QtGui, QtWidgets
 from scipy.ndimage import maximum_filter1d, minimum_filter1d
-from scipy.signal import butter, filtfilt
+from scipy.signal import butter, filtfilt, sosfiltfilt
 
 APP_NAME = "MyScope"
 APP_VERSION = "0.3.8"
@@ -626,6 +626,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
             "lowpass": {"cutoff_hz": 10.0, "order": 4},
             "highpass": {"cutoff_hz": 1.0, "order": 4},
             "bandpass": {"low_cutoff_hz": 1.0, "high_cutoff_hz": 10.0, "order": 4},
+            "bandpass_sos": {"low_cutoff_hz": 1.0, "high_cutoff_hz": 10.0, "order": 4},
             "moving_pkpk": {
                 "window_sec": 1.0,
                 "use_marker": False,
@@ -654,6 +655,74 @@ class TdmsPlotter(QtWidgets.QMainWindow):
 
     def current_group(self):
         return self.dataset.get_group(self.current_group_name())
+
+    def _reset_workspace(self):
+        self.dataset = SignalDataset()
+        self.channel_map.clear()
+        self.plotted_data.clear()
+        self.undo_stack.clear()
+        self.group_selection_state = {}
+        self._last_group_name = ""
+
+        self.group_combo.blockSignals(True)
+        self.group_combo.clear()
+        self.group_combo.blockSignals(False)
+
+        self.channel_list.blockSignals(True)
+        self.channel_list.clear()
+        self.channel_list.blockSignals(False)
+
+        self.file_label.setText("No file loaded")
+        self.info_box.clear()
+        self.band_table.setRowCount(0)
+        self.band_label.setText("X1: -, X2: -, dX: -")
+
+        self.band_checkbox.setChecked(True)
+        self.xy_mode_checkbox.setChecked(False)
+        self.bottom_enable_autoscale_y_checkbox.setChecked(False)
+        self.update_bottom_y_controls_visibility()
+
+        self.plot.clear()
+        self.legend = self.plot.addLegend()
+        self.legend.anchor((1, 0), (1, 0))
+        self.legend.setOffset((-10, 10))
+        self.plot.addItem(self.region)
+        self.region.setRegion((0.0, 1.0))
+        self.region.setVisible(True)
+
+        self.band_plot.clear()
+        self.band_legend = self.band_plot.addLegend()
+        self.band_legend.anchor((1, 0), (1, 0))
+        self.band_legend.setOffset((-10, 10))
+        self.band_plot.setVisible(True)
+
+        for idx, pair in enumerate(self.xy_pairs):
+            pair["enable"].setChecked(idx == 0)
+            pair["x_combo"].blockSignals(True)
+            pair["y_combo"].blockSignals(True)
+            pair["x_combo"].clear()
+            pair["y_combo"].clear()
+            pair["x_combo"].blockSignals(False)
+            pair["y_combo"].blockSignals(False)
+
+    def new_project(self):
+        try:
+            has_workspace_data = self.dataset.has_groups() or bool(self.undo_stack)
+            if has_workspace_data:
+                reply = QtWidgets.QMessageBox.question(
+                    self,
+                    "New Project",
+                    "Start a new project and clear the current workspace?",
+                    QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                    QtWidgets.QMessageBox.No,
+                )
+                if reply != QtWidgets.QMessageBox.Yes:
+                    return
+
+            self._reset_workspace()
+            self.statusBar().showMessage("New project created")
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "New Project Error", str(e))
 
     def _build_ui(self):
         central = QtWidgets.QWidget()
@@ -832,7 +901,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         self.band_table = QtWidgets.QTableWidget(0, 12)
         self.band_table.setObjectName("band_table")
         self.band_table.setHorizontalHeaderLabels([
-            "Channel", "Unit", "Y@X1", "Y@X2", "Î”Y", "Mean",
+            "Channel", "Unit", "Y@X1", "Y@X2", "Delta Y", "Mean",
             "Min", "Max", "PkPk", "StdDev", "RMS", "AC RMS",
         ])
         self.band_table.verticalHeader().setVisible(False)
@@ -865,6 +934,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         self.statusBar().showMessage(f"{APP_NAME} {APP_VERSION} ready")
 
     def _build_actions(self):
+        self.action_new_project = QtWidgets.QAction("New Project", self)
         self.action_open_tdms = QtWidgets.QAction("Open TDMS", self)
         self.action_open_slab = QtWidgets.QAction("Open sLAB File", self)
         self.action_open_srm = QtWidgets.QAction("Open SRM File", self)
@@ -894,6 +964,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         self.action_filter_lowpass = QtWidgets.QAction("Low-pass...", self)
         self.action_filter_highpass = QtWidgets.QAction("High-pass...", self)
         self.action_filter_bandpass = QtWidgets.QAction("Band-pass...", self)
+        self.action_filter_bandpass_sos = QtWidgets.QAction("Band-pass (Stable SOS)...", self)
         self.action_moving_pkpk = QtWidgets.QAction("Moving Window Pk-Pk...", self)
         self.action_moving_rms = QtWidgets.QAction("Moving Window RMS...", self)
         self.action_subtract_mean = QtWidgets.QAction("Subtract Mean", self)
@@ -902,6 +973,8 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         menubar = self.menuBar()
 
         file_menu = menubar.addMenu("File")
+        file_menu.addAction(self.action_new_project)
+        file_menu.addSeparator()
         file_menu.addAction(self.action_open_tdms)
         file_menu.addAction(self.action_open_slab)
         file_menu.addAction(self.action_open_srm)
@@ -933,6 +1006,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         filter_menu.addAction(self.action_filter_lowpass)
         filter_menu.addAction(self.action_filter_highpass)
         filter_menu.addAction(self.action_filter_bandpass)
+        filter_menu.addAction(self.action_filter_bandpass_sos)
         filter_menu.addAction(self.action_moving_pkpk)
         filter_menu.addAction(self.action_moving_rms)
         filter_menu.addAction(self.action_subtract_mean)
@@ -943,6 +1017,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         self.open_srm_button.clicked.connect(self.open_srm)
         self.open_vib_button.clicked.connect(self.open_vib)
 
+        self.action_new_project.triggered.connect(self.new_project)
         self.action_open_tdms.triggered.connect(self.open_tdms)
         self.action_open_slab.triggered.connect(self.open_slab)
         self.action_open_srm.triggered.connect(self.open_srm)
@@ -956,6 +1031,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         self.action_filter_lowpass.triggered.connect(self.filter_lowpass)
         self.action_filter_highpass.triggered.connect(self.filter_highpass)
         self.action_filter_bandpass.triggered.connect(self.filter_bandpass)
+        self.action_filter_bandpass_sos.triggered.connect(self.filter_bandpass_sos)
         self.action_moving_pkpk.triggered.connect(self.filter_moving_window_pkpk)
         self.action_moving_rms.triggered.connect(self.filter_moving_window_rms)
         self.action_subtract_mean.triggered.connect(self.filter_subtract_mean)
@@ -1325,7 +1401,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
             if not path:
                 return
             dataset_to_tdms(self.dataset, path)
-            self.statusBar().showMessage(f"Exported dataset â†’ {path}")
+            self.statusBar().showMessage(f"Exported dataset Ă„â€šĂ˘â‚¬ĹľÄ‚ËĂ˘â€šÂ¬ÄąË‡Ă„â€šĂ˘â‚¬Ä…Ä‚â€šĂ‚ÂÄ‚â€žĂ˘â‚¬ĹˇÄ‚â€ąĂ‚ÂĂ„â€šĂ‹ÂÄ‚ËĂ˘â€šÂ¬ÄąË‡Ä‚â€šĂ‚Â¬Ă„â€šĂ˘â‚¬ĹˇÄ‚â€šĂ‚Â Ä‚â€žĂ˘â‚¬ĹˇÄ‚â€ąĂ‚ÂĂ„â€šĂ‹ÂÄ‚ËĂ˘â€šÂ¬ÄąË‡Ä‚â€šĂ‚Â¬Ă„â€šĂ‹ÂÄ‚ËĂ˘â€šÂ¬ÄąÄľÄ‚â€ąĂ‚Â {path}")
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Export Error", str(e))
 
@@ -1886,6 +1962,70 @@ class TdmsPlotter(QtWidgets.QMainWindow):
             self._refresh_channels_after_processing(new_names)
             self.update_info_panel()
             self.statusBar().showMessage(f"Created {len(new_names)} band-pass channel(s)")
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Filter Error", str(e))
+
+    def filter_bandpass_sos(self):
+        try:
+            selected = self._selected_base_channel_names()
+            if not selected:
+                QtWidgets.QMessageBox.information(self, "Filter", "Select at least one channel.")
+                return
+
+            cfg = self.filter_settings["bandpass_sos"]
+            low_cutoff, ok = QtWidgets.QInputDialog.getDouble(
+                self, "Band-pass Filter (Stable SOS)", "Low cutoff frequency [Hz]:",
+                float(cfg.get("low_cutoff_hz", 1.0)), 1e-9, 1e12, 6
+            )
+            if not ok:
+                return
+
+            high_cutoff, ok = QtWidgets.QInputDialog.getDouble(
+                self, "Band-pass Filter (Stable SOS)", "High cutoff frequency [Hz]:",
+                float(cfg.get("high_cutoff_hz", 10.0)), 1e-9, 1e12, 6
+            )
+            if not ok:
+                return
+
+            order, ok = QtWidgets.QInputDialog.getInt(
+                self, "Band-pass Filter (Stable SOS)", "Filter order:",
+                int(cfg.get("order", 4)), 1, 20, 1
+            )
+            if not ok:
+                return
+
+            low_cutoff = float(low_cutoff)
+            high_cutoff = float(high_cutoff)
+            if low_cutoff >= high_cutoff:
+                raise RuntimeError("Low cutoff frequency must be below high cutoff frequency.")
+
+            cfg["low_cutoff_hz"] = low_cutoff
+            cfg["high_cutoff_hz"] = high_cutoff
+            cfg["order"] = int(order)
+
+            self._push_undo_state(f"band-pass stable sos filter ({low_cutoff:g} Hz - {high_cutoff:g} Hz)")
+            new_names = []
+
+            for ch_name in selected:
+                dt = self._get_dt_for_channel(ch_name)
+                fs = 1.0 / dt
+                nyq = 0.5 * fs
+                if high_cutoff >= nyq:
+                    raise RuntimeError(
+                        f"High cutoff frequency for '{ch_name}' must be below Nyquist ({nyq:.6g} Hz)."
+                    )
+
+                y = np.asarray(self.current_group()["channels"][ch_name]["y"], dtype=float)
+                sos = butter(order, [low_cutoff / nyq, high_cutoff / nyq], btype="bandpass", output="sos")
+                y_filt = sosfiltfilt(sos, y)
+
+                new_name = f"{ch_name}_BPsos_{low_cutoff:g}-{high_cutoff:g}Hz"
+                self._create_filtered_channel(ch_name, new_name, y_filt)
+                new_names.append(new_name)
+
+            self._refresh_channels_after_processing(new_names)
+            self.update_info_panel()
+            self.statusBar().showMessage(f"Created {len(new_names)} stable SOS band-pass channel(s)")
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Filter Error", str(e))
 
