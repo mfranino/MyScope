@@ -1,4 +1,4 @@
-﻿# MyScope 0.3.8
+# MyScope 0.3.8
 
 ## Overview
 
@@ -18,6 +18,7 @@ This version supports:
 - Open SRM
 - Open VIB
 - Open saved project files (`.prj` + companion `.tdms`)
+- Start a new empty workspace with `New Project`
 - Append newly loaded files as additional groups when data is already loaded
 
 ### 2. Group and channel browser
@@ -54,6 +55,7 @@ This version supports:
 - Enable/disable band region with checkbox
 - Interactive band region on main graph
 - Band statistics table for all plotted channels
+- Channel names shown in the vertical row header
 - Statistics shown:
   - Y@X1
   - Y@X2
@@ -74,7 +76,7 @@ This version supports:
 - Resizable lower plot panel
 - Displays only data inside the current band
 - Hidden when band is disabled
-- Uses min/max envelope downsampling for responsive plotting
+- Uses full-resolution data inside the selected band
 - Supports optional Y autoscaling controls
 
 ### 7. XY plot mode in bottom graph
@@ -89,7 +91,7 @@ This version supports:
 
 ### 8. Plot performance
 - Main graph uses min/max envelope downsampling
-- Bottom graph uses min/max envelope downsampling
+- Bottom graph uses full-resolution data inside the selected band
 - Full-resolution data is still preserved for:
   - filters
   - band statistics
@@ -132,6 +134,8 @@ Filter output:
 
 ### 12. Export
 - Export current dataset to TDMS
+- Export statistics table to CSV
+- Export statistics table to Excel (`.xlsx`) when `openpyxl` is installed
 - Exports all groups and channels currently stored in dataset
 - Uses waveform-style TDMS properties when sampling is uniform
 
@@ -240,7 +244,7 @@ python MyScope_0_3_8.py
 - Some imported text formats may skip malformed rows.
 - Some imported legacy text formats are read using `cp1250` encoding.
 - Band statistics are always computed from full-resolution data.
-- Plot downsampling affects only display, not stored data.
+- Main-plot downsampling affects only display, not stored data.
 - Undo stack stores dataset snapshots and may use more memory for large files.
 - The application is currently implemented as a single Python file.
 
@@ -249,16 +253,15 @@ python MyScope_0_3_8.py
 1. Notch filter
 2. FFT / spectrum view
 3. Viewport-based downsampling
-4. Export statistics table to CSV
-5. Export plot image / PDF
-6. Channel search/filter box
-7. Multi-axis plotting
-8. Cursors and markers
-9. Data quality checks
-10. CSV / Excel import wizard
-11. Batch processing
-12. Comparison and alignment tools
-13. Plugin-style custom analysis extensions
+4. Export plot image / PDF
+5. Channel search/filter box
+6. Multi-axis plotting
+7. Cursors and markers
+8. Data quality checks
+9. CSV / Excel import wizard
+10. Batch processing
+11. Comparison and alignment tools
+12. Plugin-style custom analysis extensions
 
 ## Repository Contents
 
