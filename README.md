@@ -1,4 +1,4 @@
-# MyScope 0.3.8
+# MyScope 0.3.9
 
 ## Overview
 
@@ -235,7 +235,7 @@ pip install numpy scipy nptdms qtpy pyqtgraph PyQt5
 Start the application with:
 
 ```powershell
-python MyScope_0_3_8.py
+python MyScope.py
 ```
 
 ## Notes
@@ -265,10 +265,21 @@ python MyScope_0_3_8.py
 
 ## Repository Contents
 
-- `MyScope_0_3_8.py` - main application source
+- `MyScope.py` - main application source
 - `README.md` - project overview and usage instructions
 
 ## Version
 
 Application name: MyScope  
-Version: 0.3.8
+Version: 0.3.9
+
+## Updates
+
+### 0.3.9
+- Renamed the main application file from MyScope_0_3_8.py to MyScope.py.
+- Added statistics-table export from the File menu to CSV and Excel (.xlsx).
+- Excel statistics export now writes numeric values as numbers instead of text.
+- Moved channel names from the Band statistics table body into the vertical row header.
+- Removed lower band-plot downsampling in standard view and XY mode.
+- Added New Project in the File menu to reset the workspace.
+- Added Band-pass (Stable SOS) filter option.
