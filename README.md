@@ -1,104 +1,53 @@
-# MyScope 0.3.9
+﻿# MyScope 0.3.9
 
 ## Overview
 
-MyScope is a desktop signal viewer and signal-analysis tool built with QtPy and PyQtGraph for opening, viewing, comparing, filtering, inspecting, and exporting measurement data.
+MyScope is a desktop signal viewer and signal-analysis tool built with QtPy and PyQtGraph for importing, organizing, plotting, filtering, and exporting measurement data.
 
-This version supports:
-- TDMS files
-- sLAB files
-- SRM files
-- VIB files
+Supported input formats:
+- TDMS
+- sLAB
+- SRM
+- VIB
 
-## Main Features
+## Main Capabilities
 
-### 1. File import
-- Open TDMS
-- Open sLAB
-- Open SRM
-- Open VIB
-- Open saved project files (`.prj` + companion `.tdms`)
+### File import
+- Open TDMS, sLAB, SRM, and VIB files
+- Batch open multiple files from the file picker
+- Append imported files as new groups when a workspace is already loaded
+- Open saved project files (`.prj` with companion `.tdms`)
 - Start a new empty workspace with `New Project`
-- Append newly loaded files as additional groups when data is already loaded
 
-### 2. Group and channel browser
-- List all groups in the dataset
-- List all imported channels for the selected group
+### Group management
+- Select groups from the group dropdown
+- Rename groups
+- Delete groups
+- Move groups up and down in the dropdown order
+- Preserve independent channel selections per group
+
+### Channel management
+- List all channels for the selected group
 - Show units in channel names when available
-- Multi-select channels
+- Multi-select channels for plotting
+- Clear channel selections across all groups with `Clear Ch selection`
+- Rename channels
+- Delete channels
+
+### Plotting
 - Plot selected channels automatically
-- Rename channels from context menu
-- Delete channels from context menu
-- Rename groups from context menu
-- Delete groups from context menu
+- Main plot with white background, grid, legend, and custom zoom/pan modes
+- Min/max envelope downsampling for responsive display
+- Bottom plot for the active band range
+- Optional XY mode in the bottom plot with multiple XY pairs
 
-### 3. Main plot
-- Interactive plotting of selected channels
-- White background
-- Grid enabled
-- Legend in the top-right corner
-- Mouse interaction through custom zoom/pan modes
-- Uses min/max envelope downsampling for responsive display
+### Band analysis
+- Enable or disable the analysis band
+- Move and resize the band interactively on the main plot
+- Show band statistics for plotted channels
+- Display X1, X2, and dX band coordinates
 
-### 4. Zoom and navigation
-- Box Zoom
-- Zoom X
-- Zoom Y
-- Pan
-- Zoom to Band
-- Reset View
-- Auto Range
-- Auto-scale lower-plot Y axis once
-- Optional continuous lower-plot autoscale Y
-
-### 5. Band analysis
-- Enable/disable band region with checkbox
-- Interactive band region on main graph
-- Band statistics table for all plotted channels
-- Channel names shown in the vertical row header
-- Statistics shown:
-  - Y@X1
-  - Y@X2
-  - Delta Y
-  - Mean
-  - Min
-  - Max
-  - Peak-to-Peak
-  - StdDev
-  - RMS
-  - AC RMS
-- Band label with:
-  - X1
-  - X2
-  - dX
-
-### 6. Bottom graph
-- Resizable lower plot panel
-- Displays only data inside the current band
-- Hidden when band is disabled
-- Uses full-resolution data inside the selected band
-- Supports optional Y autoscaling controls
-
-### 7. XY plot mode in bottom graph
-- Checkbox to switch lower graph from time plot to XY plot
-- Four independent XY curve slots
-- Each slot contains:
-  - enable checkbox
-  - X channel selector
-  - Y channel selector
-- Multiple XY curves can be shown simultaneously
-- XY controls are resizable with splitter
-
-### 8. Plot performance
-- Main graph uses min/max envelope downsampling
-- Bottom graph uses full-resolution data inside the selected band
-- Full-resolution data is still preserved for:
-  - filters
-  - band statistics
-  - export
-  - project save/load
-
-### 9. Filters
+### Filters
 - Moving Average
 - Low-pass Butterworth
 - High-pass Butterworth
@@ -108,53 +57,40 @@ This version supports:
 - Moving Window RMS
 - Subtract Mean
 
-Filter output:
-- New filtered channels are created and stored in the dataset
-- Original channels remain unchanged
-- Filter settings are reused as defaults for the next run
+Filter results are added as new channels and the original data is preserved.
 
-### 10. Undo
-- Ctrl+Z supported
-- Undo restores previous dataset state
-- Works for:
-  - channel deletion
-  - group deletion
-  - rename operations
-  - filter-generated channels
+### Project save/open
+- Save the current project state to `.prj`
+- Save dataset data to companion `.tdms`
+- Restore current group, channel selections, filter settings, plot ranges, splitters, widgets, and XY selections
 
-### 11. Project save/open
-- Save project state to `.prj`
-- Save dataset to companion `.tdms`
-- Restore selected group and channels
-- Restore filter settings
-- Restore band position
-- Restore plot ranges
-- Restore splitters and widget state
-- Restore XY plot selections
+### Export
+- Export the current dataset to TDMS
+- Export the band statistics table to CSV
+- Export the band statistics table to Excel (`.xlsx`) when `openpyxl` is installed
 
-### 12. Export
-- Export current dataset to TDMS
-- Export statistics table to CSV
-- Export statistics table to Excel (`.xlsx`) when `openpyxl` is installed
-- Exports all groups and channels currently stored in dataset
-- Uses waveform-style TDMS properties when sampling is uniform
+## File Format Notes
 
-## Supported File Formats
-
-### 1. TDMS
+### TDMS
 - Reads waveform channels
-- Reads units if available
-- Reconstructs X axis from waveform properties
+- Reads units when available
+- Reconstructs the X axis from waveform properties
 - Preserves root and group properties
+- Exports waveform metadata including:
+  - `wf_increment`
+  - `wf_start_offset`
+  - `wf_samples`
+  - `wf_xname`
+  - `wf_xunit_string`
+  - `wf_start_time` when group date/time metadata can be parsed
 
-### 2. sLAB
-- Reads metadata from header
+### sLAB
+- Reads metadata from the header
 - Reads channel descriptions and units
-- Handles irregular trailing tabs and missing fields
-- Builds dataset directly without DataFrame
+- Handles malformed trailing tabs and missing fields
 - Validates uniform time sampling
 
-### 3. SRM
+### SRM
 - Assumes:
   - column 0 = Time
   - column 1 = X1
@@ -165,13 +101,15 @@ Filter output:
   - column 6 = Y3
   - column 7 = Pgen
   - column 8 = KP
-- Reads scan rate if available
-- Validates uniform time sampling
+- Reads scan rate from the header when available
+- Accepts rounded time columns when they are consistent with the header scan rate
+- Detects mismatch between header sampling rate and time column
+- Can repair missing SRM samples by rebuilding a uniform timebase and interpolating signal values
 
-### 4. VIB
-- Reads metadata fields from header
-- Reads scan rate
-- Builds time axis from sampling rate
+### VIB
+- Reads metadata from the header
+- Reads sampling rate
+- Builds the time axis from sampling rate
 - Reads channel names from channel definitions/header
 - Imports all valid numeric channels
 
@@ -179,31 +117,30 @@ Filter output:
 
 The info panel displays:
 - Root properties
+- Source file path for the selected group
 - Group name
 - Group properties
 - Sampling rate
 - dt
 - Number of samples
-- Number of channels in current group
-- Total number of channels in dataset
-- Number of selected channels in current group
+- Number of channels in the selected group
 - Duration
 
 ## User Interface Summary
 
 ### Left panel
-- Open buttons
-- File path / loaded-file summary
+- File open buttons
+- Loaded file or group summary
 - Group selector
 - Channel list
 
 ### Center
-- Main interactive plot
-- Bottom band / XY plot
+- Main plot
+- Bottom band or XY plot
 
 ### Right panel
 - Band enable checkbox
-- Band coordinates label
+- Band coordinate label
 - Band statistics table
 - Information box
 
@@ -241,45 +178,8 @@ python MyScope.py
 ## Notes
 
 - TDMS export requires uniformly sampled X data.
-- Some imported text formats may skip malformed rows.
-- Some imported legacy text formats are read using `cp1250` encoding.
-- Band statistics are always computed from full-resolution data.
-- Main-plot downsampling affects only display, not stored data.
-- Undo stack stores dataset snapshots and may use more memory for large files.
+- Some imported text formats skip malformed rows.
+- Legacy text-based formats are read using `cp1250` encoding.
+- Main-plot downsampling affects display only, not stored data.
+- Undo stores dataset snapshots and may use more memory for large projects.
 - The application is currently implemented as a single Python file.
-
-## Further Upgrade Suggestions
-
-1. Notch filter
-2. FFT / spectrum view
-3. Viewport-based downsampling
-4. Export plot image / PDF
-5. Channel search/filter box
-6. Multi-axis plotting
-7. Cursors and markers
-8. Data quality checks
-9. CSV / Excel import wizard
-10. Batch processing
-11. Comparison and alignment tools
-12. Plugin-style custom analysis extensions
-
-## Repository Contents
-
-- `MyScope.py` - main application source
-- `README.md` - project overview and usage instructions
-
-## Version
-
-Application name: MyScope  
-Version: 0.3.9
-
-## Updates
-
-### 0.3.9
-- Renamed the main application file from MyScope_0_3_8.py to MyScope.py.
-- Added statistics-table export from the File menu to CSV and Excel (.xlsx).
-- Excel statistics export now writes numeric values as numbers instead of text.
-- Moved channel names from the Band statistics table body into the vertical row header.
-- Removed lower band-plot downsampling in standard view and XY mode.
-- Added New Project in the File menu to reset the workspace.
-- Added Band-pass (Stable SOS) filter option.
