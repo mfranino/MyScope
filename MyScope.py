@@ -1,11 +1,13 @@
 ﻿import copy
 import csv
+import ctypes
 import json
 import os
 import re
 import sys
 from datetime import datetime
 from pathlib import Path
+from ctypes import wintypes
 
 import numpy as np
 import pyqtgraph as pg
@@ -826,6 +828,56 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         self._build_menus()
         self._connect_signals()
         self.update_bottom_y_controls_visibility()
+        self._memory_timer = QtCore.QTimer(self)
+        self._memory_timer.setInterval(2000)
+        self._memory_timer.timeout.connect(self.update_memory_usage_label)
+        self._memory_timer.start()
+        self.update_memory_usage_label()
+
+    def _get_memory_usage_mb(self):
+        try:
+            class PROCESS_MEMORY_COUNTERS_EX(ctypes.Structure):
+                _fields_ = [
+                    ("cb", wintypes.DWORD),
+                    ("PageFaultCount", wintypes.DWORD),
+                    ("PeakWorkingSetSize", ctypes.c_size_t),
+                    ("WorkingSetSize", ctypes.c_size_t),
+                    ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                    ("PagefileUsage", ctypes.c_size_t),
+                    ("PeakPagefileUsage", ctypes.c_size_t),
+                    ("PrivateUsage", ctypes.c_size_t),
+                ]
+
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            psapi = ctypes.WinDLL("psapi", use_last_error=True)
+
+            kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+            psapi.GetProcessMemoryInfo.argtypes = [
+                wintypes.HANDLE,
+                ctypes.POINTER(PROCESS_MEMORY_COUNTERS_EX),
+                wintypes.DWORD,
+            ]
+            psapi.GetProcessMemoryInfo.restype = wintypes.BOOL
+
+            counters = PROCESS_MEMORY_COUNTERS_EX()
+            counters.cb = ctypes.sizeof(PROCESS_MEMORY_COUNTERS_EX)
+            process = kernel32.GetCurrentProcess()
+            ok = psapi.GetProcessMemoryInfo(process, ctypes.byref(counters), counters.cb)
+            if not ok:
+                return None
+            return float(counters.WorkingSetSize) / (1024.0 * 1024.0)
+        except Exception:
+            return None
+
+    def update_memory_usage_label(self):
+        usage_mb = self._get_memory_usage_mb()
+        if usage_mb is None:
+            self.memory_usage_label.setText("Memory: n/a")
+        else:
+            self.memory_usage_label.setText(f"Memory: {usage_mb:.1f} MB")
 
     def current_group_name(self):
         return self.group_combo.currentText().strip()
@@ -860,6 +912,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         self._set_xy_pair_count(self.xy_pair_count_spin.value())
         self.bottom_enable_autoscale_y_checkbox.setChecked(False)
         self.update_bottom_y_controls_visibility()
+
 
         self.plot.clear()
         self.legend = self.plot.addLegend()
@@ -1107,10 +1160,17 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         info_layout.addWidget(self.info_box)
         info_group.setLayout(info_layout)
 
+        memory_row = QtWidgets.QHBoxLayout()
+        memory_row.addStretch()
+        self.memory_usage_label = QtWidgets.QLabel("Memory: --")
+        self.memory_usage_label.setObjectName("memory_usage_label")
+        memory_row.addWidget(self.memory_usage_label)
+
         right.addWidget(self.band_checkbox)
         right.addWidget(self.band_label)
         right.addWidget(self.band_table)
         right.addWidget(info_group)
+        right.addLayout(memory_row)
 
         right_widget = QtWidgets.QWidget()
         right_widget.setLayout(right)
@@ -1262,6 +1322,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
 
     def on_bottom_enable_autoscale_y_toggled(self, checked):
         self.update_bottom_y_controls_visibility()
+
         self._update_band_plot()
 
     def _push_undo_state(self, description=""):
@@ -3349,6 +3410,12 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+
+
+
 
 
 
