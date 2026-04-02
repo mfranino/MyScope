@@ -903,6 +903,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
 
         self.file_label.setText("No file loaded")
         self.info_box.clear()
+        self.notes_box.clear()
         self.band_table.setRowCount(0)
         self.band_label.setText("X1: -, X2: -, dX: -")
 
@@ -1160,6 +1161,15 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         info_layout.addWidget(self.info_box)
         info_group.setLayout(info_layout)
 
+        notes_group = QtWidgets.QGroupBox("Notes")
+        notes_layout = QtWidgets.QVBoxLayout()
+        self.notes_box = QtWidgets.QPlainTextEdit()
+        self.notes_box.setPlaceholderText("Project notes")
+        self.notes_box.setMinimumHeight(120)
+        self.notes_box.setObjectName("notes_box")
+        notes_layout.addWidget(self.notes_box)
+        notes_group.setLayout(notes_layout)
+
         memory_row = QtWidgets.QHBoxLayout()
         memory_row.addStretch()
         self.memory_usage_label = QtWidgets.QLabel("Memory: --")
@@ -1170,6 +1180,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         right.addWidget(self.band_label)
         right.addWidget(self.band_table)
         right.addWidget(info_group)
+        right.addWidget(notes_group)
         right.addLayout(memory_row)
 
         right_widget = QtWidgets.QWidget()
@@ -1193,6 +1204,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         self.action_open_vib = QtWidgets.QAction("Open VIB File", self)
         self.action_open_project = QtWidgets.QAction("Open Project...", self)
         self.action_save_project = QtWidgets.QAction("Save Project...", self)
+        self.action_save_project.setShortcut(QtGui.QKeySequence.Save)
         self.action_export_dataset = QtWidgets.QAction("Export Dataset TDMS", self)
         self.action_export_statistics = QtWidgets.QAction("Export Statistics Table...", self)
 
@@ -3261,6 +3273,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
             "last_group_name": self._last_group_name,
             "group_selection_state": self.group_selection_state,
             "filter_settings": self.filter_settings,
+            "notes": self.notes_box.toPlainText(),
             "band": {
                 "enabled": self.band_checkbox.isChecked(),
                 "region": list(self.region.getRegion()),
@@ -3310,6 +3323,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
     def _apply_project_state(self, state):
         self.group_selection_state = copy.deepcopy(state.get("group_selection_state", {}))
         self.filter_settings = copy.deepcopy(state.get("filter_settings", self.filter_settings))
+        self.notes_box.setPlainText(str(state.get("notes", "")))
 
         widgets_state = state.get("widgets", {})
         if "xy_pair_count_spin" in widgets_state:
@@ -3461,6 +3475,14 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+
+
+
+
+
 
 
 
