@@ -2853,15 +2853,66 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         if item is None:
             return
 
+        display_name = item.text()
+        if display_name not in self.channel_map:
+            return
+
+        channel_name = self.channel_map[display_name]
+        group = self.current_group()
+        channel_names = list(group["channels"].keys())
+        try:
+            index = channel_names.index(channel_name)
+        except ValueError:
+            return
+
         menu = QtWidgets.QMenu(self)
+        move_up_action = menu.addAction("Move up")
+        move_down_action = menu.addAction("Move down")
+        move_up_action.setEnabled(index > 0)
+        move_down_action.setEnabled(index < len(channel_names) - 1)
+        menu.addSeparator()
         rename_action = menu.addAction("Rename channel")
         delete_action = menu.addAction("Delete channel")
         action = menu.exec_(self.channel_list.viewport().mapToGlobal(pos))
 
-        if action == rename_action:
+        if action == move_up_action:
+            self.move_channel(item, -1)
+        elif action == move_down_action:
+            self.move_channel(item, 1)
+        elif action == rename_action:
             self.rename_channel(item)
         elif action == delete_action:
             self.delete_channel(item)
+
+    def move_channel(self, item, direction):
+        try:
+            display_name = item.text()
+            if display_name not in self.channel_map:
+                return
+
+            channel_name = self.channel_map[display_name]
+            group_name = self.current_group_name()
+            group = self.current_group()
+            channel_names = list(group["channels"].keys())
+            idx = channel_names.index(channel_name)
+            new_idx = idx + int(direction)
+            if new_idx < 0 or new_idx >= len(channel_names):
+                return
+
+            self._push_undo_state(f"move channel {channel_name}")
+            channel_names[idx], channel_names[new_idx] = channel_names[new_idx], channel_names[idx]
+            group["channels"] = {name: group["channels"][name] for name in channel_names}
+
+            selected_set = set(self.group_selection_state.get(group_name, []))
+            self.group_selection_state[group_name] = [name for name in channel_names if name in selected_set]
+
+            self.populate_channels()
+            self.refresh_group_channel_highlight()
+            self.plot_channels()
+            self.update_info_panel()
+            self.statusBar().showMessage(f"Moved channel: {channel_name}")
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Move Channel Error", f"Could not move channel.\n\n{e}")
 
     def rename_channel(self, item):
         try:
@@ -3410,6 +3461,8 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
 
 
 
