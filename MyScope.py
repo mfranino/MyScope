@@ -3018,9 +3018,21 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         if not group_name:
             return
 
+        items = list(self.dataset.groups.keys())
+        idx = items.index(group_name) if group_name in items else -1
+
         menu = QtWidgets.QMenu(self)
         move_up_action = menu.addAction("Move up")
         move_down_action = menu.addAction("Move down")
+        move_top_action = menu.addAction("Move to top")
+        move_bottom_action = menu.addAction("Move to bottom")
+        sort_action = menu.addAction("Sort groups")
+        if idx == 0:
+            move_up_action.setEnabled(False)
+            move_top_action.setEnabled(False)
+        if idx == len(items) - 1:
+            move_down_action.setEnabled(False)
+            move_bottom_action.setEnabled(False)
         menu.addSeparator()
         rename_action = menu.addAction(f"Rename group '{group_name}'")
         delete_action = menu.addAction(f"Delete group '{group_name}'")
@@ -3030,6 +3042,12 @@ class TdmsPlotter(QtWidgets.QMainWindow):
             self.move_group(group_name, -1)
         elif action == move_down_action:
             self.move_group(group_name, 1)
+        elif action == move_top_action:
+            self.move_group_to_edge(group_name, to_top=True)
+        elif action == move_bottom_action:
+            self.move_group_to_edge(group_name, to_top=False)
+        elif action == sort_action:
+            self.sort_groups_descending()
         elif action == rename_action:
             self.rename_group(group_name)
         elif action == delete_action:
@@ -3042,9 +3060,21 @@ class TdmsPlotter(QtWidgets.QMainWindow):
             return
 
         group_name = index.data()
+        items = list(self.dataset.groups.keys())
+        idx = items.index(group_name) if group_name in items else -1
+
         menu = QtWidgets.QMenu(self)
         move_up_action = menu.addAction("Move up")
         move_down_action = menu.addAction("Move down")
+        move_top_action = menu.addAction("Move to top")
+        move_bottom_action = menu.addAction("Move to bottom")
+        sort_action = menu.addAction("Sort groups")
+        if idx == 0:
+            move_up_action.setEnabled(False)
+            move_top_action.setEnabled(False)
+        if idx == len(items) - 1:
+            move_down_action.setEnabled(False)
+            move_bottom_action.setEnabled(False)
         menu.addSeparator()
         rename_action = menu.addAction(f"Rename group '{group_name}'")
         delete_action = menu.addAction(f"Delete group '{group_name}'")
@@ -3054,11 +3084,76 @@ class TdmsPlotter(QtWidgets.QMainWindow):
             self.move_group(group_name, -1)
         elif action == move_down_action:
             self.move_group(group_name, 1)
+        elif action == move_top_action:
+            self.move_group_to_edge(group_name, to_top=True)
+        elif action == move_bottom_action:
+            self.move_group_to_edge(group_name, to_top=False)
+        elif action == sort_action:
+            self.sort_groups_descending()
         elif action == rename_action:
             self.rename_group(group_name)
         elif action == delete_action:
             self.delete_group(group_name)
 
+    def sort_groups_descending(self):
+        try:
+            if len(self.dataset.groups) < 2:
+                return
+
+            self._push_undo_state("sort groups descending")
+            current_group = self.current_group_name().strip()
+            items = sorted(self.dataset.groups.items(), key=lambda item: item[0], reverse=True)
+            self.dataset.groups = dict(items)
+
+            self.populate_groups()
+            if current_group:
+                idx = self.group_combo.findText(current_group)
+                if idx >= 0:
+                    self.group_combo.setCurrentIndex(idx)
+
+            self.populate_channels()
+            self.refresh_group_channel_highlight()
+            self.update_info_panel()
+            self.plot_channels()
+            self.statusBar().showMessage("Groups sorted descending")
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Sort Groups Error", f"Could not sort groups.\n\n{e}")
+
+
+    def move_group_to_edge(self, group_name, to_top=True):
+        try:
+            group_name = str(group_name).strip()
+            if not group_name or group_name not in self.dataset.groups:
+                return
+
+            items = list(self.dataset.groups.items())
+            idx = next((i for i, (name, _) in enumerate(items) if name == group_name), -1)
+            if idx < 0:
+                return
+
+            target_idx = 0 if to_top else len(items) - 1
+            if idx == target_idx:
+                return
+
+            self._push_undo_state(f"move group {group_name}")
+            item = items.pop(idx)
+            items.insert(target_idx, item)
+            self.dataset.groups = dict(items)
+
+            current_group = self.current_group_name().strip() or group_name
+            self.populate_groups()
+            combo_idx = self.group_combo.findText(current_group)
+            if combo_idx >= 0:
+                self.group_combo.setCurrentIndex(combo_idx)
+
+            self.populate_channels()
+            self.refresh_group_channel_highlight()
+            self.update_info_panel()
+            self.plot_channels()
+            edge_name = "top" if to_top else "bottom"
+            self.statusBar().showMessage(f"Moved group to {edge_name}: {group_name}")
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Move Group Error", f"Could not move group.\n\n{e}")
     def move_group(self, group_name, direction):
         try:
             group_name = str(group_name).strip()
@@ -3475,6 +3570,9 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
 
 
 
