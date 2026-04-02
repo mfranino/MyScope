@@ -856,6 +856,8 @@ class TdmsPlotter(QtWidgets.QMainWindow):
 
         self.band_checkbox.setChecked(True)
         self.xy_mode_checkbox.setChecked(False)
+        self.xy_pair_count_spin.setValue(2)
+        self._set_xy_pair_count(self.xy_pair_count_spin.value())
         self.bottom_enable_autoscale_y_checkbox.setChecked(False)
         self.update_bottom_y_controls_visibility()
 
@@ -989,6 +991,13 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         self.xy_mode_checkbox = QtWidgets.QCheckBox("XY plot")
         self.xy_mode_checkbox.setObjectName("xy_mode_checkbox")
 
+        self.xy_pair_count_spin = QtWidgets.QSpinBox()
+        self.xy_pair_count_spin.setObjectName("xy_pair_count_spin")
+        self.xy_pair_count_spin.setMinimum(1)
+        self.xy_pair_count_spin.setMaximum(32)
+        self.xy_pair_count_spin.setValue(2)
+        self.xy_pair_count_spin.setToolTip("Number of XY channel pairs")
+
         self.bottom_autoscale_y_once_button = QtWidgets.QPushButton("Auto-scale Y once")
 
         self.bottom_enable_autoscale_y_checkbox = QtWidgets.QCheckBox("Enable autoscale Y")
@@ -996,40 +1005,6 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         self.bottom_enable_autoscale_y_checkbox.setObjectName("bottom_enable_autoscale_y_checkbox")
 
         self.xy_pairs = []
-        for i in range(4):
-            enable_cb = QtWidgets.QCheckBox()
-            enable_cb.setChecked(i == 0)
-
-            x_label = QtWidgets.QLabel(f"X{i + 1}:")
-            y_label = QtWidgets.QLabel(f"Y{i + 1}:")
-            x_combo = QtWidgets.QComboBox()
-            y_combo = QtWidgets.QComboBox()
-
-            x_label.setMinimumWidth(24)
-            y_label.setMinimumWidth(24)
-            x_combo.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
-            y_combo.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
-            x_combo.setMinimumWidth(140)
-            y_combo.setMinimumWidth(140)
-
-            enable_cb.setVisible(False)
-            x_label.setVisible(False)
-            y_label.setVisible(False)
-            x_combo.setVisible(False)
-            y_combo.setVisible(False)
-
-            enable_cb.setObjectName(f"xy_enable_{i}")
-            x_combo.setObjectName(f"xy_x_combo_{i}")
-            y_combo.setObjectName(f"xy_y_combo_{i}")
-
-            self.xy_pairs.append({
-                "enable": enable_cb,
-                "x_label": x_label,
-                "y_label": y_label,
-                "x_combo": x_combo,
-                "y_combo": y_combo,
-            })
-
         band_bottom_widget = QtWidgets.QWidget()
         band_bottom_layout = QtWidgets.QHBoxLayout(band_bottom_widget)
         band_bottom_layout.setContentsMargins(0, 0, 0, 0)
@@ -1040,22 +1015,18 @@ class TdmsPlotter(QtWidgets.QMainWindow):
 
         top_controls_row = QtWidgets.QHBoxLayout()
         top_controls_row.addWidget(self.xy_mode_checkbox)
+        top_controls_row.addWidget(self.xy_pair_count_spin)
         top_controls_row.addStretch()
         top_controls_row.addWidget(self.bottom_autoscale_y_once_button)
         top_controls_row.addWidget(self.bottom_enable_autoscale_y_checkbox)
         xy_controls_layout.addLayout(top_controls_row)
 
-        for pair in self.xy_pairs:
-            row = QtWidgets.QHBoxLayout()
-            row.addWidget(pair["enable"])
-            row.addWidget(pair["x_label"])
-            row.addWidget(pair["x_combo"], 1)
-            row.addWidget(pair["y_label"])
-            row.addWidget(pair["y_combo"], 1)
-            xy_controls_layout.addLayout(row)
+        self.xy_pairs_layout = QtWidgets.QVBoxLayout()
+        self.xy_pairs_layout.setContentsMargins(0, 0, 0, 0)
+        xy_controls_layout.addLayout(self.xy_pairs_layout)
+        self._set_xy_pair_count(self.xy_pair_count_spin.value())
 
         xy_controls_layout.addStretch()
-
         self.xy_splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
         self.xy_splitter.addWidget(self.band_plot)
         self.xy_splitter.addWidget(xy_controls_widget)
@@ -1090,6 +1061,8 @@ class TdmsPlotter(QtWidgets.QMainWindow):
             "Min", "Max", "PkPk", "StdDev", "RMS", "AC RMS",
         ])
         self.band_table.verticalHeader().setVisible(True)
+        self.band_table_copy_shortcut = QtWidgets.QShortcut(QtGui.QKeySequence.Copy, self.band_table)
+        self.band_table_copy_shortcut.activated.connect(self.copy_band_table_selection)
 
         info_group = QtWidgets.QGroupBox("Info")
         info_layout = QtWidgets.QVBoxLayout()
@@ -1244,13 +1217,9 @@ class TdmsPlotter(QtWidgets.QMainWindow):
 
         self.band_checkbox.toggled.connect(self.toggle_band)
         self.xy_mode_checkbox.toggled.connect(self.toggle_xy_mode)
+        self.xy_pair_count_spin.valueChanged.connect(self._on_xy_pair_count_changed)
         self.bottom_autoscale_y_once_button.clicked.connect(self.auto_scale_bottom_y_once)
         self.bottom_enable_autoscale_y_checkbox.toggled.connect(self.on_bottom_enable_autoscale_y_toggled)
-
-        for pair in self.xy_pairs:
-            pair["enable"].toggled.connect(self._update_band_plot)
-            pair["x_combo"].currentIndexChanged.connect(self._update_band_plot)
-            pair["y_combo"].currentIndexChanged.connect(self._update_band_plot)
 
     def update_bottom_y_controls_visibility(self):
         autoscale_enabled = self.bottom_enable_autoscale_y_checkbox.isChecked()
@@ -1385,6 +1354,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
             self.region.setVisible(enabled)
             self.band_plot.setVisible(enabled)
             self.xy_mode_checkbox.setEnabled(enabled)
+            self.xy_pair_count_spin.setEnabled(enabled)
             self.bottom_autoscale_y_once_button.setEnabled(enabled)
             self.bottom_enable_autoscale_y_checkbox.setEnabled(enabled)
 
@@ -1627,6 +1597,25 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Export Error", str(e))
 
+    def copy_band_table_selection(self):
+        selected_indexes = self.band_table.selectedIndexes()
+        if not selected_indexes:
+            return
+
+        rows = sorted({index.row() for index in selected_indexes})
+        cols = sorted({index.column() for index in selected_indexes})
+        row_lookup = {row: i for i, row in enumerate(rows)}
+        col_lookup = {col: i for i, col in enumerate(cols)}
+
+        grid = [["" for _ in cols] for _ in rows]
+        for index in selected_indexes:
+            item = self.band_table.item(index.row(), index.column())
+            grid[row_lookup[index.row()]][col_lookup[index.column()]] = item.text() if item is not None else ""
+
+        text = "\n".join("\t".join(row) for row in grid)
+        QtWidgets.QApplication.clipboard().setText(text)
+        self.statusBar().showMessage("Selected statistics copied to clipboard")
+
     def export_statistics_table(self):
         try:
             if self.band_table.rowCount() == 0 or self.band_table.columnCount() == 0:
@@ -1651,10 +1640,13 @@ class TdmsPlotter(QtWidgets.QMainWindow):
                     path = str(Path(path).with_suffix(".csv"))
                     suffix = ".csv"
 
-            headers = [self.band_table.horizontalHeaderItem(col).text() for col in range(self.band_table.columnCount())]
+            vertical_header_title = self.band_table.verticalHeaderItem(0)
+            leading_header = vertical_header_title.text() if vertical_header_title and vertical_header_title.text().strip() else "Channel"
+            headers = [leading_header] + [self.band_table.horizontalHeaderItem(col).text() for col in range(self.band_table.columnCount())]
             rows = []
             for row in range(self.band_table.rowCount()):
-                row_values = []
+                vertical_item = self.band_table.verticalHeaderItem(row)
+                row_values = [vertical_item.text() if vertical_item is not None else ""]
                 for col in range(self.band_table.columnCount()):
                     item = self.band_table.item(row, col)
                     row_values.append(item.text() if item is not None else "")
@@ -1698,7 +1690,6 @@ class TdmsPlotter(QtWidgets.QMainWindow):
             self.statusBar().showMessage(f"Statistics table exported: {path}")
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Export Statistics Error", str(e))
-
     def populate_channels(self):
         self.channel_list.blockSignals(True)
         self.channel_list.clear()
@@ -1773,8 +1764,96 @@ class TdmsPlotter(QtWidgets.QMainWindow):
 
         self.group_selection_state[group_name] = selected
 
-    def update_xy_channel_selectors(self):
+    def _capture_xy_pair_state(self):
+        pair_state = []
+        for pair in self.xy_pairs:
+            pair_state.append({
+                "enabled": pair["enable"].isChecked(),
+                "x": pair["x_combo"].currentText(),
+                "y": pair["y_combo"].currentText(),
+            })
+        return pair_state
+
+    def _set_xy_pair_visibility(self, visible):
+        for pair in self.xy_pairs:
+            pair["row_widget"].setVisible(bool(visible))
+
+    def _create_xy_pair(self, index):
+        row_widget = QtWidgets.QWidget()
+        row_layout = QtWidgets.QHBoxLayout(row_widget)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+
+        enable_cb = QtWidgets.QCheckBox()
+        enable_cb.setChecked(index == 0)
+        enable_cb.setObjectName(f"xy_enable_{index}")
+
+        x_label = QtWidgets.QLabel(f"X{index + 1}:")
+        y_label = QtWidgets.QLabel(f"Y{index + 1}:")
+        x_label.setMinimumWidth(24)
+        y_label.setMinimumWidth(24)
+
+        x_combo = QtWidgets.QComboBox()
+        y_combo = QtWidgets.QComboBox()
+        x_combo.setObjectName(f"xy_x_combo_{index}")
+        y_combo.setObjectName(f"xy_y_combo_{index}")
+        x_combo.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+        y_combo.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+        x_combo.setMinimumWidth(140)
+        y_combo.setMinimumWidth(140)
+
+        row_layout.addWidget(enable_cb)
+        row_layout.addWidget(x_label)
+        row_layout.addWidget(x_combo, 1)
+        row_layout.addWidget(y_label)
+        row_layout.addWidget(y_combo, 1)
+
+        enable_cb.toggled.connect(self._update_band_plot)
+        x_combo.currentIndexChanged.connect(self._update_band_plot)
+        y_combo.currentIndexChanged.connect(self._update_band_plot)
+
+        self.xy_pairs_layout.addWidget(row_widget)
+        self.xy_pairs.append({
+            "enable": enable_cb,
+            "x_label": x_label,
+            "y_label": y_label,
+            "x_combo": x_combo,
+            "y_combo": y_combo,
+            "row_widget": row_widget,
+        })
+
+    def _collect_selected_xy_defaults(self):
+        defaults = []
         plot_names = list(self.plotted_data.keys())
+
+        for i in range(0, len(plot_names), 2):
+            x_name = plot_names[i]
+            y_name = plot_names[i + 1] if i + 1 < len(plot_names) else x_name
+            defaults.append({"x": x_name, "y": y_name, "enabled": True})
+        return defaults
+
+    def _set_xy_pair_count(self, count, pair_state=None):
+        count = max(1, int(count))
+        while self.xy_pairs_layout.count():
+            item = self.xy_pairs_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+        self.xy_pairs = []
+        for index in range(count):
+            self._create_xy_pair(index)
+
+        self.update_xy_channel_selectors(prefill=bool(self.xy_mode_checkbox.isChecked()), preferred_pairs=pair_state)
+        self._set_xy_pair_visibility(self.xy_mode_checkbox.isChecked())
+
+    def _on_xy_pair_count_changed(self, value):
+        pair_state = self._capture_xy_pair_state()
+        self._set_xy_pair_count(value, pair_state=pair_state)
+        self._update_band_plot()
+
+    def update_xy_channel_selectors(self, prefill=False, preferred_pairs=None):
+        plot_names = list(self.plotted_data.keys())
+        preferred_pairs = list(preferred_pairs or [])
 
         for idx, pair in enumerate(self.xy_pairs):
             x_combo = pair["x_combo"]
@@ -1782,6 +1861,9 @@ class TdmsPlotter(QtWidgets.QMainWindow):
 
             current_x = x_combo.currentText()
             current_y = y_combo.currentText()
+            preferred = preferred_pairs[idx] if idx < len(preferred_pairs) else {}
+            target_x = str(preferred.get("x", "")).strip() if prefill else current_x
+            target_y = str(preferred.get("y", "")).strip() if prefill else current_y
 
             x_combo.blockSignals(True)
             y_combo.blockSignals(True)
@@ -1792,33 +1874,35 @@ class TdmsPlotter(QtWidgets.QMainWindow):
                 x_combo.addItem(name)
                 y_combo.addItem(name)
 
-            if current_x and x_combo.findText(current_x) >= 0:
+            if target_x and x_combo.findText(target_x) >= 0:
+                x_combo.setCurrentText(target_x)
+            elif current_x and x_combo.findText(current_x) >= 0:
                 x_combo.setCurrentText(current_x)
             elif x_combo.count() > 0:
-                x_combo.setCurrentIndex(0)
+                default_index = min(idx * 2, x_combo.count() - 1)
+                x_combo.setCurrentIndex(default_index)
 
-            if current_y and y_combo.findText(current_y) >= 0:
+            if target_y and y_combo.findText(target_y) >= 0:
+                y_combo.setCurrentText(target_y)
+            elif current_y and y_combo.findText(current_y) >= 0:
                 y_combo.setCurrentText(current_y)
             elif y_combo.count() > 0:
-                default_index = min(idx, y_combo.count() - 1)
+                default_index = min(idx * 2 + 1, y_combo.count() - 1)
                 y_combo.setCurrentIndex(default_index)
 
+            pair["enable"].setChecked(bool(preferred.get("enabled", idx == 0)) if prefill else pair["enable"].isChecked())
             x_combo.blockSignals(False)
             y_combo.blockSignals(False)
 
-        if not any(pair["enable"].isChecked() for pair in self.xy_pairs):
+        if self.xy_pairs and not any(pair["enable"].isChecked() for pair in self.xy_pairs):
             self.xy_pairs[0]["enable"].setChecked(True)
 
     def toggle_xy_mode(self, checked):
         visible = bool(checked)
-        for pair in self.xy_pairs:
-            pair["enable"].setVisible(visible)
-            pair["x_label"].setVisible(visible)
-            pair["y_label"].setVisible(visible)
-            pair["x_combo"].setVisible(visible)
-            pair["y_combo"].setVisible(visible)
+        self._set_xy_pair_visibility(visible)
+        if visible:
+            self.update_xy_channel_selectors(prefill=True, preferred_pairs=self._collect_selected_xy_defaults())
         self._update_band_plot()
-
     def plot_channels(self):
         self.plot.clear()
 
@@ -1854,7 +1938,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
                 color_index += 1
 
         self.plot.autoRange()
-        self.update_xy_channel_selectors()
+        self.update_xy_channel_selectors(prefill=False)
         self.update_band_views()
 
     def _update_band_plot(self):
@@ -2962,13 +3046,14 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         elif isinstance(widget, QtWidgets.QComboBox):
             data["current_text"] = widget.currentText()
             data["current_index"] = widget.currentIndex()
+        elif isinstance(widget, QtWidgets.QSpinBox):
+            data["value"] = widget.value()
         elif isinstance(widget, QtWidgets.QSplitter):
             data["sizes"] = widget.sizes()
         elif isinstance(widget, QtWidgets.QTableWidget):
             data["column_widths"] = [widget.columnWidth(i) for i in range(widget.columnCount())]
         else:
             return None
-
         return name, data
 
     def _apply_widget_state(self, widget, data):
@@ -2984,6 +3069,8 @@ class TdmsPlotter(QtWidgets.QMainWindow):
                     saved_idx = int(data.get("current_index", 0))
                     if 0 <= saved_idx < widget.count():
                         widget.setCurrentIndex(saved_idx)
+            elif isinstance(widget, QtWidgets.QSpinBox):
+                widget.setValue(int(data.get("value", widget.value())))
             elif isinstance(widget, QtWidgets.QSplitter):
                 sizes = data.get("sizes", [])
                 if sizes:
@@ -3054,21 +3141,33 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         self.group_selection_state = copy.deepcopy(state.get("group_selection_state", {}))
         self.filter_settings = copy.deepcopy(state.get("filter_settings", self.filter_settings))
 
+        widgets_state = state.get("widgets", {})
+        if "xy_pair_count_spin" in widgets_state:
+            self._apply_widget_state(self.xy_pair_count_spin, widgets_state["xy_pair_count_spin"])
+        self._set_xy_pair_count(self.xy_pair_count_spin.value())
+
         current_group = str(state.get("current_group", "")).strip()
         if current_group:
             idx = self.group_combo.findText(current_group)
             if idx >= 0:
                 self.group_combo.setCurrentIndex(idx)
 
-        widgets_state = state.get("widgets", {})
         for widget in self.findChildren(QtWidgets.QWidget):
             name = widget.objectName().strip() if widget.objectName() else ""
-            if not name or name not in widgets_state:
+            if (
+                not name
+                or name == "xy_pair_count_spin"
+                or name.startswith("xy_enable_")
+                or name.startswith("xy_x_combo_")
+                or name.startswith("xy_y_combo_")
+                or name not in widgets_state
+            ):
                 continue
             self._apply_widget_state(widget, widgets_state[name])
 
         self.populate_channels()
         self.refresh_group_channel_highlight()
+        self.plot_channels()
 
         xy_pairs_state = state.get("xy_pairs", [])
         for i, pair_state in enumerate(xy_pairs_state):
@@ -3192,4 +3291,8 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+
 
