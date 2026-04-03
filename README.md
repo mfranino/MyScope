@@ -2,7 +2,7 @@
 
 ## Overview
 
-MyScope is a desktop signal viewer and signal-analysis tool built with QtPy and PyQtGraph for importing, organizing, plotting, filtering, and exporting measurement data.
+MyScope is a desktop signal viewer and signal-analysis tool built with QtPy and PyQtGraph for importing, organizing, plotting, filtering, annotating, and exporting measurement data.
 
 Supported input formats:
 - TDMS
@@ -24,6 +24,8 @@ Supported input formats:
 - Rename groups
 - Delete groups
 - Move groups up and down in the dropdown order
+- Move groups directly to the top or bottom from the context menu
+- Sort groups descending (`Z -> A`, numeric descending) from the context menu
 - Preserve independent channel selections per group
 
 ### Channel management
@@ -33,19 +35,26 @@ Supported input formats:
 - Clear channel selections across all groups with `Clear Ch selection`
 - Rename channels
 - Delete channels
+- Reorder channels within a group with `Move up` and `Move down` from the context menu
 
 ### Plotting
 - Plot selected channels automatically
 - Main plot with white background, grid, legend, and custom zoom/pan modes
 - Min/max envelope downsampling for responsive display
 - Bottom plot for the active band range
-- Optional XY mode in the bottom plot with multiple XY pairs
+- Optional XY mode in the bottom plot
+- Dynamic XY pair count selector next to `XY plot`
+- Per-pair XY enable checkbox plus X/Y channel selectors
+- XY channel selectors can be auto-populated from the current plotted channel list order when XY mode is enabled
+- Manual band-plot axis controls for `X axis range` and `Y axis range` with `Apply`
 
 ### Band analysis
 - Enable or disable the analysis band
 - Move and resize the band interactively on the main plot
 - Show band statistics for plotted channels
 - Display X1, X2, and dX band coordinates
+- Band statistics table supports direct copy of selected cells to the clipboard with `Ctrl+C`
+- Clipboard copy uses tab-separated rows so the selection can be pasted directly into Excel
 
 ### Filters
 - Moving Average
@@ -63,15 +72,19 @@ Filter results are added as new channels and the original data is preserved.
 - Save the current project state to `.prj`
 - Save dataset data to companion `.tdms`
 - Restore current group, channel selections, filter settings, plot ranges, splitters, widgets, and XY selections
+- Save and restore project notes
+- Save Project is available from the menu and with `Ctrl+S`
 
 ### Export
 - Export the current dataset to TDMS
 - Export the band statistics table to CSV
 - Export the band statistics table to Excel (`.xlsx`) when `openpyxl` is installed
+- Statistics export includes both horizontal column headers and vertical row headers
 
 ## File Format Notes
 
 ### TDMS
+- TDMS is a binary format, not ASCII text
 - Reads waveform channels
 - Reads units when available
 - Reconstructs the X axis from waveform properties
@@ -113,7 +126,7 @@ Filter results are added as new channels and the original data is preserved.
 - Reads channel names from channel definitions/header
 - Imports all valid numeric channels
 
-## Information Panel
+## Information And Notes Panels
 
 The info panel displays:
 - Root properties
@@ -126,13 +139,17 @@ The info panel displays:
 - Number of channels in the selected group
 - Duration
 
+The right panel also includes:
+- A `Notes` panel for project-only notes
+- A live memory usage indicator in the lower-right corner of the main panel
+
 ## User Interface Summary
 
 ### Left panel
 - File open buttons
 - Loaded file or group summary
-- Group selector
-- Channel list
+- Group selector with right-click group management actions
+- Channel list with right-click channel management and reordering actions
 
 ### Center
 - Main plot
@@ -141,8 +158,12 @@ The info panel displays:
 ### Right panel
 - Band enable checkbox
 - Band coordinate label
+- XY controls and pair selectors
 - Band statistics table
+- Band axis range controls
 - Information box
+- Notes box
+- Memory usage label
 
 ## Dependencies
 
@@ -159,12 +180,15 @@ A Qt backend is also required, for example:
 - PySide2
 - PySide6
 
+Excel export additionally requires:
+- openpyxl
+
 Typical installation example:
 
 ```powershell
 python -m venv .venv
 .venv\Scripts\activate
-pip install numpy scipy nptdms qtpy pyqtgraph PyQt5
+pip install numpy scipy nptdms qtpy pyqtgraph openpyxl PyQt5
 ```
 
 ## Running

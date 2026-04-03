@@ -2241,7 +2241,8 @@ class TdmsPlotter(QtWidgets.QMainWindow):
                 else:
                     mean = minv = maxv = pkpk = std = rms = ac_rms = np.nan
 
-                self.band_table.setVerticalHeaderItem(row, QtWidgets.QTableWidgetItem(str(name)))
+                header_text = str(name)[:20]
+                self.band_table.setVerticalHeaderItem(row, QtWidgets.QTableWidgetItem(header_text))
                 values = [unit, y1, y2, y2 - y1, mean, minv, maxv, pkpk, std, rms, ac_rms]
                 for col, val in enumerate(values):
                     text = f"{val:.6g}" if isinstance(val, (float, np.floating)) else str(val)
