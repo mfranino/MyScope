@@ -78,11 +78,13 @@ class CustomViewBox(pg.ViewBox):
     def __init__(self):
         super().__init__()
         self.mode = self.MODE_RECT
-        self.setMouseMode(pg.ViewBox.RectMode)
+        self.setMouseMode(pg.ViewBox.PanMode)
 
     def set_mode(self, mode):
         self.mode = mode
-        if mode in (self.MODE_RECT, self.MODE_X, self.MODE_Y):
+        if mode == self.MODE_RECT:
+            self.setMouseMode(pg.ViewBox.PanMode)
+        elif mode in (self.MODE_X, self.MODE_Y):
             self.setMouseMode(pg.ViewBox.RectMode)
         elif mode == self.MODE_PAN:
             self.setMouseMode(pg.ViewBox.PanMode)
