@@ -1144,11 +1144,11 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         self.band_label = QtWidgets.QLabel("X1: -, X2: -, dX: -")
         self.band_label.setObjectName("band_label")
 
-        self.band_table = QtWidgets.QTableWidget(0, 11)
+        self.band_table = QtWidgets.QTableWidget(0, 13)
         self.band_table.setObjectName("band_table")
         self.band_table.setHorizontalHeaderLabels([
             "Unit", "Y@X1", "Y@X2", "Delta Y", "Mean",
-            "Min", "Max", "PkPk", "StdDev", "RMS", "AC RMS",
+            "Min", "Max", "PkPk", "PkPk98", "PkPk95", "StdDev", "RMS", "AC RMS",
         ])
         self.band_table.verticalHeader().setVisible(True)
         self.band_table_copy_shortcut = QtWidgets.QShortcut(QtGui.QKeySequence.Copy, self.band_table)
@@ -2237,15 +2237,16 @@ class TdmsPlotter(QtWidgets.QMainWindow):
                     minv = np.min(samples)
                     maxv = np.max(samples)
                     pkpk = maxv - minv
+                    pkpk98 = np.percentile(samples, 99) - np.percentile(samples, 1)
+                    pkpk95 = np.percentile(samples, 97.5) - np.percentile(samples, 2.5)
                     std = np.std(samples)
                     rms = np.sqrt(np.mean(samples ** 2))
                     ac_rms = np.sqrt(np.mean((samples - mean) ** 2))
                 else:
-                    mean = minv = maxv = pkpk = std = rms = ac_rms = np.nan
-
+                    mean = minv = maxv = pkpk = pkpk98 = pkpk95 = std = rms = ac_rms = np.nan
                 header_text = str(name)[:20]
                 self.band_table.setVerticalHeaderItem(row, QtWidgets.QTableWidgetItem(header_text))
-                values = [unit, y1, y2, y2 - y1, mean, minv, maxv, pkpk, std, rms, ac_rms]
+                values = [unit, y1, y2, y2 - y1, mean, minv, maxv, pkpk, pkpk98, pkpk95, std, rms, ac_rms]
                 for col, val in enumerate(values):
                     text = f"{val:.6g}" if isinstance(val, (float, np.floating)) else str(val)
                     self.band_table.setItem(row, col, QtWidgets.QTableWidgetItem(text))
