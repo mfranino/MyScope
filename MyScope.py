@@ -276,7 +276,7 @@ def dataset_from_slab(file_path):
     date_str = find_value("Date")
     file_name_str = find_value("File Name")
 
-    group_name = (measurement or "Measured Data").strip()
+    group_name = os.path.splitext(os.path.basename(str(file_name_str or "").strip()))[0]
     group_props = {
         "Author": measured_by,
         "Project": object_name,
@@ -982,7 +982,8 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         self.group_combo.view().setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
         self.group_combo.setObjectName("group_combo")
 
-        self.channel_list = QtWidgets.QListWidget()
+        self.channel_list = QtWidgets.QTreeWidget()
+        self.channel_list.setHeaderHidden(True)
         self.channel_list.setSelectionMode(QtWidgets.QAbstractItemView.MultiSelection)
         self.channel_list.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
         self.channel_list.setObjectName("channel_list")
@@ -1000,8 +1001,6 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         left.addWidget(self.open_srm_button)
         left.addWidget(self.open_vib_button)
         left.addWidget(self.file_label)
-        left.addWidget(QtWidgets.QLabel("Group"))
-        left.addWidget(self.group_combo)
         left.addLayout(channels_header)
         left.addWidget(self.channel_list)
 
@@ -1314,6 +1313,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         self.group_combo.view().customContextMenuRequested.connect(self.show_group_view_context_menu)
 
         self.channel_list.itemSelectionChanged.connect(self._on_channel_selection_changed)
+        self.channel_list.itemClicked.connect(self.on_channel_tree_item_clicked)
         self.clear_channel_selection_button.clicked.connect(self.clear_channel_selection_all_groups)
         self.channel_list.customContextMenuRequested.connect(self.show_channel_context_menu)
 
@@ -1586,7 +1586,10 @@ class TdmsPlotter(QtWidgets.QMainWindow):
 
     def _load_dataset(self, dataset, file_label):
         self.dataset = dataset
-        self.group_selection_state = {g: [] for g in self.dataset.get_group_names()}
+        self.group_selection_state = {
+            g: list(self.dataset.get_group(g)["channels"].keys())
+            for g in self.dataset.get_group_names()
+        }
         self.file_label.setText(file_label)
 
         self.populate_groups()
@@ -1607,7 +1610,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         new_group_names = self.dataset.get_group_names()
 
         for group_name in new_group_names:
-            self.group_selection_state.setdefault(group_name, [])
+            self.group_selection_state.setdefault(group_name, list(self.dataset.get_group(group_name)["channels"].keys()))
 
         self.file_label.setText(f"{len(new_group_names)} groups loaded")
         self.populate_groups()
@@ -1635,16 +1638,40 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         dataset = dataset_from_tdms(TdmsFile.read(path))
         self._add_loaded_dataset(dataset, path)
 
+
+    def _open_files_with_progress(self, paths, label, import_func):
+        progress = QtWidgets.QProgressDialog(f"Opening {label} files...", "Cancel", 0, len(paths), self)
+        progress.setWindowTitle(f"Open {label}")
+        progress.setWindowModality(QtCore.Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
+
+        for idx, path in enumerate(paths, start=1):
+            progress.setLabelText(f"Opening {label} file {idx} of {len(paths)}\n{path}")
+            progress.setValue(idx - 1)
+            QtWidgets.QApplication.processEvents()
+            if progress.wasCanceled():
+                self.statusBar().showMessage(f"Open {label} canceled")
+                return
+
+            result = import_func(path)
+            if result is False:
+                progress.setValue(idx)
+                return
+
+            progress.setValue(idx)
+            QtWidgets.QApplication.processEvents()
+            if progress.wasCanceled():
+                self.statusBar().showMessage(f"Open {label} canceled")
+                return
     def open_tdms(self):
         paths, _ = QtWidgets.QFileDialog.getOpenFileNames(self, "Open TDMS", "", "TDMS files (*.tdms)")
         if not paths:
             return
         try:
-            for path in paths:
-                self._import_tdms_file(path)
+            self._open_files_with_progress(paths, "TDMS", self._import_tdms_file)
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Open Error", str(e))
-
     def _import_slab_file(self, path):
         dataset = dataset_from_slab(path)
         self._add_loaded_dataset(dataset, path)
@@ -1656,8 +1683,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         if not paths:
             return
         try:
-            for path in paths:
-                self._import_slab_file(path)
+            self._open_files_with_progress(paths, "sLAB", self._import_slab_file)
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "sLAB Import Error", str(e))
 
@@ -1701,9 +1727,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         )
         if not paths:
             return
-        for path in paths:
-            if not self._import_srm_file(path):
-                break
+        self._open_files_with_progress(paths, "SRM", self._import_srm_file)
 
     def _import_vib_file(self, path):
         dataset = dataset_from_vib(path)
@@ -1714,8 +1738,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         if not paths:
             return
         try:
-            for path in paths:
-                self._import_vib_file(path)
+            self._open_files_with_progress(paths, "VIB", self._import_vib_file)
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "VIB Import Error", str(e))
 
@@ -1827,40 +1850,82 @@ class TdmsPlotter(QtWidgets.QMainWindow):
             self.statusBar().showMessage(f"Statistics table exported: {path}")
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Export Statistics Error", str(e))
+    def _is_channel_tree_item(self, item):
+        return item is not None and item.parent() is not None
+
+    def _channel_tree_group_name(self, item):
+        if item is None:
+            return ""
+        parent = item.parent()
+        return parent.text(0) if parent is not None else item.text(0)
+
+    def _channel_tree_name(self, item):
+        if not self._is_channel_tree_item(item):
+            return ""
+        return str(item.data(0, QtCore.Qt.UserRole) or "")
+
+    def _iter_channel_tree_items(self):
+        for i in range(self.channel_list.topLevelItemCount()):
+            group_item = self.channel_list.topLevelItem(i)
+            for j in range(group_item.childCount()):
+                yield group_item.child(j)
+
+    def _capture_group_tree_expansion_state(self):
+        state = {}
+        for i in range(self.channel_list.topLevelItemCount()):
+            item = self.channel_list.topLevelItem(i)
+            if item is not None:
+                state[item.text(0)] = bool(item.isExpanded())
+        return state
+
     def populate_channels(self):
+        expanded_state = self._capture_group_tree_expansion_state()
         self.channel_list.blockSignals(True)
         self.channel_list.clear()
         self.channel_map.clear()
 
-        group = self.current_group()
-        for name, data in group["channels"].items():
-            unit = str(data.get("unit", "")).strip()
-            display_name = f"{name} [{unit}]" if unit else name
-            self.channel_list.addItem(display_name)
-            self.channel_map[display_name] = name
+        for group_name in self.dataset.get_group_names():
+            group = self.dataset.get_group(group_name)
+            group_item = QtWidgets.QTreeWidgetItem([group_name])
+            group_item.setFlags(QtCore.Qt.ItemIsEnabled)
+            self.channel_list.addTopLevelItem(group_item)
+
+            for name, data in group["channels"].items():
+                unit = str(data.get("unit", "")).strip()
+                display_name = f"{name} [{unit}]" if unit else name
+                channel_item = QtWidgets.QTreeWidgetItem([display_name])
+                channel_item.setData(0, QtCore.Qt.UserRole, name)
+                channel_item.setFlags(QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable)
+                group_item.addChild(channel_item)
+
+            group_item.setExpanded(bool(expanded_state.get(group_name, False)))
 
         self.channel_list.blockSignals(False)
 
     def refresh_group_channel_highlight(self):
-        group_name = self.current_group_name().strip()
-        if not group_name:
-            return
-
-        selected_names = set(self.group_selection_state.get(group_name, []))
+        selected_by_group = {
+            group_name: set(self.group_selection_state.get(group_name, []))
+            for group_name in self.dataset.get_group_names()
+        }
 
         self.channel_list.blockSignals(True)
         self.channel_list.clearSelection()
 
-        for i in range(self.channel_list.count()):
-            item = self.channel_list.item(i)
-            display_name = item.text()
-            if display_name not in self.channel_map:
-                continue
-            base_name = self.channel_map[display_name]
-            if base_name in selected_names:
+        for item in self._iter_channel_tree_items():
+            group_name = self._channel_tree_group_name(item)
+            channel_name = self._channel_tree_name(item)
+            if channel_name in selected_by_group.get(group_name, set()):
                 item.setSelected(True)
 
         self.channel_list.blockSignals(False)
+
+    def on_channel_tree_item_clicked(self, item, column):
+        group_name = self._channel_tree_group_name(item)
+        if not group_name:
+            return
+        idx = self.group_combo.findText(group_name)
+        if idx >= 0 and idx != self.group_combo.currentIndex():
+            self.group_combo.setCurrentIndex(idx)
 
     def _handle_group_change(self):
         if self._last_group_name:
@@ -1889,18 +1954,21 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         self._save_current_group_selection_for_name(self.current_group_name())
 
     def _save_current_group_selection_for_name(self, group_name):
-        group_name = str(group_name).strip()
-        if not group_name:
-            return
-
-        selected = []
+        selected_by_group = {g: [] for g in self.dataset.get_group_names()}
         for item in self.channel_list.selectedItems():
-            display_name = item.text()
-            if display_name in self.channel_map:
-                selected.append(self.channel_map[display_name])
+            if not self._is_channel_tree_item(item):
+                continue
+            selected_group = self._channel_tree_group_name(item)
+            channel_name = self._channel_tree_name(item)
+            if selected_group and channel_name:
+                selected_by_group.setdefault(selected_group, []).append(channel_name)
 
-        self.group_selection_state[group_name] = selected
-
+        for selected_group, selected_names in selected_by_group.items():
+            ordered_names = list(self.dataset.get_group(selected_group)["channels"].keys())
+            selected_set = set(selected_names)
+            self.group_selection_state[selected_group] = [
+                name for name in ordered_names if name in selected_set
+            ]
     def _capture_xy_pair_state(self):
         pair_state = []
         for pair in self.xy_pairs:
@@ -2267,10 +2335,15 @@ class TdmsPlotter(QtWidgets.QMainWindow):
 
     def _selected_base_channel_names(self):
         names = []
+        current_group = self.current_group_name().strip()
         for item in self.channel_list.selectedItems():
-            display_name = item.text()
-            if display_name in self.channel_map:
-                names.append(self.channel_map[display_name])
+            if not self._is_channel_tree_item(item):
+                continue
+            if self._channel_tree_group_name(item) != current_group:
+                continue
+            channel_name = self._channel_tree_name(item)
+            if channel_name:
+                names.append(channel_name)
         return names
 
     def _refresh_channels_after_processing(self, new_channel_names):
@@ -2918,18 +2991,19 @@ class TdmsPlotter(QtWidgets.QMainWindow):
             self.statusBar().showMessage(f"Created {len(new_names)} mean-subtracted channel(s)")
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Filter Error", str(e))
-
     def show_channel_context_menu(self, pos):
         item = self.channel_list.itemAt(pos)
         if item is None:
             return
 
-        display_name = item.text()
-        if display_name not in self.channel_map:
+        global_pos = self.channel_list.viewport().mapToGlobal(pos)
+        if not self._is_channel_tree_item(item):
+            self._show_group_actions_menu(item.text(0), global_pos, include_tree_actions=True)
             return
 
-        channel_name = self.channel_map[display_name]
-        group = self.current_group()
+        group_name = self._channel_tree_group_name(item)
+        channel_name = self._channel_tree_name(item)
+        group = self.dataset.get_group(group_name)
         channel_names = list(group["channels"].keys())
         try:
             index = channel_names.index(channel_name)
@@ -2944,7 +3018,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         menu.addSeparator()
         rename_action = menu.addAction("Rename channel")
         delete_action = menu.addAction("Delete channel")
-        action = menu.exec_(self.channel_list.viewport().mapToGlobal(pos))
+        action = menu.exec_(global_pos)
 
         if action == move_up_action:
             self.move_channel(item, -1)
@@ -2954,16 +3028,14 @@ class TdmsPlotter(QtWidgets.QMainWindow):
             self.rename_channel(item)
         elif action == delete_action:
             self.delete_channel(item)
-
     def move_channel(self, item, direction):
         try:
-            display_name = item.text()
-            if display_name not in self.channel_map:
+            if not self._is_channel_tree_item(item):
                 return
 
-            channel_name = self.channel_map[display_name]
-            group_name = self.current_group_name()
-            group = self.current_group()
+            channel_name = self._channel_tree_name(item)
+            group_name = self._channel_tree_group_name(item)
+            group = self.dataset.get_group(group_name)
             channel_names = list(group["channels"].keys())
             idx = channel_names.index(channel_name)
             new_idx = idx + int(direction)
@@ -2987,13 +3059,12 @@ class TdmsPlotter(QtWidgets.QMainWindow):
 
     def rename_channel(self, item):
         try:
-            display_name = item.text()
-            if display_name not in self.channel_map:
+            if not self._is_channel_tree_item(item):
                 return
 
-            old_name = self.channel_map[display_name]
-            group_name = self.current_group_name()
-            group = self.current_group()
+            old_name = self._channel_tree_name(item)
+            group_name = self._channel_tree_group_name(item)
+            group = self.dataset.get_group(group_name)
 
             new_name, ok = QtWidgets.QInputDialog.getText(
                 self, "Rename Channel", f"New name for '{old_name}':", text=old_name
@@ -3025,12 +3096,12 @@ class TdmsPlotter(QtWidgets.QMainWindow):
 
     def delete_channel(self, item):
         try:
-            display_name = item.text()
-            if display_name not in self.channel_map:
+            if not self._is_channel_tree_item(item):
                 return
 
-            base_name = self.channel_map[display_name]
-            group_name = self.current_group_name()
+            base_name = self._channel_tree_name(item)
+            group_name = self._channel_tree_group_name(item)
+            display_name = item.text(0)
 
             reply = QtWidgets.QMessageBox.question(
                 self,
@@ -3044,7 +3115,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
 
             self._push_undo_state(f"delete channel {display_name}")
 
-            group = self.current_group()
+            group = self.dataset.get_group(group_name)
             if base_name in group["channels"]:
                 del group["channels"][base_name]
 
@@ -3072,9 +3143,10 @@ class TdmsPlotter(QtWidgets.QMainWindow):
 
         return self.current_group_name().strip() or None
 
-    def show_group_context_menu(self, pos):
-        group_name = self._group_name_at_pos(pos)
-        if not group_name:
+
+    def _show_group_actions_menu(self, group_name, global_pos, include_tree_actions=False):
+        group_name = str(group_name).strip()
+        if not group_name or group_name not in self.dataset.groups:
             return
 
         items = list(self.dataset.groups.keys())
@@ -3086,6 +3158,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         move_top_action = menu.addAction("Move to top")
         move_bottom_action = menu.addAction("Move to bottom")
         sort_action = menu.addAction("Sort groups")
+        collapse_all_action = menu.addAction("Collapse all groups") if include_tree_actions else None
         if idx == 0:
             move_up_action.setEnabled(False)
             move_top_action.setEnabled(False)
@@ -3096,7 +3169,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         rename_action = menu.addAction(f"Rename group '{group_name}'")
         delete_action = menu.addAction(f"Delete group '{group_name}'")
 
-        action = menu.exec_(self.group_combo.mapToGlobal(pos))
+        action = menu.exec_(global_pos)
         if action == move_up_action:
             self.move_group(group_name, -1)
         elif action == move_down_action:
@@ -3105,6 +3178,8 @@ class TdmsPlotter(QtWidgets.QMainWindow):
             self.move_group_to_edge(group_name, to_top=True)
         elif action == move_bottom_action:
             self.move_group_to_edge(group_name, to_top=False)
+        elif action == collapse_all_action:
+            self.collapse_all_group_nodes()
         elif action == sort_action:
             self.sort_groups_descending()
         elif action == rename_action:
@@ -3112,6 +3187,17 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         elif action == delete_action:
             self.delete_group(group_name)
 
+    def collapse_all_group_nodes(self):
+        for i in range(self.channel_list.topLevelItemCount()):
+            item = self.channel_list.topLevelItem(i)
+            if item is not None:
+                item.setExpanded(False)
+        self.statusBar().showMessage("Collapsed all group nodes")
+    def show_group_context_menu(self, pos):
+        group_name = self._group_name_at_pos(pos)
+        if not group_name:
+            return
+        self._show_group_actions_menu(group_name, self.group_combo.mapToGlobal(pos))
     def show_group_view_context_menu(self, pos):
         view = self.group_combo.view()
         index = view.indexAt(pos)
@@ -3119,41 +3205,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
             return
 
         group_name = index.data()
-        items = list(self.dataset.groups.keys())
-        idx = items.index(group_name) if group_name in items else -1
-
-        menu = QtWidgets.QMenu(self)
-        move_up_action = menu.addAction("Move up")
-        move_down_action = menu.addAction("Move down")
-        move_top_action = menu.addAction("Move to top")
-        move_bottom_action = menu.addAction("Move to bottom")
-        sort_action = menu.addAction("Sort groups")
-        if idx == 0:
-            move_up_action.setEnabled(False)
-            move_top_action.setEnabled(False)
-        if idx == len(items) - 1:
-            move_down_action.setEnabled(False)
-            move_bottom_action.setEnabled(False)
-        menu.addSeparator()
-        rename_action = menu.addAction(f"Rename group '{group_name}'")
-        delete_action = menu.addAction(f"Delete group '{group_name}'")
-
-        action = menu.exec_(view.viewport().mapToGlobal(pos))
-        if action == move_up_action:
-            self.move_group(group_name, -1)
-        elif action == move_down_action:
-            self.move_group(group_name, 1)
-        elif action == move_top_action:
-            self.move_group_to_edge(group_name, to_top=True)
-        elif action == move_bottom_action:
-            self.move_group_to_edge(group_name, to_top=False)
-        elif action == sort_action:
-            self.sort_groups_descending()
-        elif action == rename_action:
-            self.rename_group(group_name)
-        elif action == delete_action:
-            self.delete_group(group_name)
-
+        self._show_group_actions_menu(group_name, view.viewport().mapToGlobal(pos))
     def sort_groups_descending(self):
         try:
             if len(self.dataset.groups) < 2:
@@ -3629,6 +3681,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
