@@ -822,6 +822,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
                 "threshold": 0.0,
                 "use_instantaneous": False,
             },
+            "scale_linear": {"gain": 1.0, "offset": 0.0},
             "subtract_mean": {},
         }
 
@@ -1234,6 +1235,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         self.action_filter_bandpass_sos = QtWidgets.QAction("Band-pass (Stable SOS)...", self)
         self.action_moving_pkpk = QtWidgets.QAction("Moving Window Pk-Pk...", self)
         self.action_moving_rms = QtWidgets.QAction("Moving Window RMS...", self)
+        self.action_scale_linear = QtWidgets.QAction("Scale...", self)
         self.action_subtract_mean = QtWidgets.QAction("Subtract Mean", self)
 
     def _build_menus(self):
@@ -1277,6 +1279,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         filter_menu.addAction(self.action_filter_bandpass_sos)
         filter_menu.addAction(self.action_moving_pkpk)
         filter_menu.addAction(self.action_moving_rms)
+        filter_menu.addAction(self.action_scale_linear)
         filter_menu.addAction(self.action_subtract_mean)
 
     def _connect_signals(self):
@@ -1303,6 +1306,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         self.action_filter_bandpass_sos.triggered.connect(self.filter_bandpass_sos)
         self.action_moving_pkpk.triggered.connect(self.filter_moving_window_pkpk)
         self.action_moving_rms.triggered.connect(self.filter_moving_window_rms)
+        self.action_scale_linear.triggered.connect(self.filter_scale_linear)
         self.action_subtract_mean.triggered.connect(self.filter_subtract_mean)
 
         self.group_combo.currentIndexChanged.connect(self._handle_group_change)
@@ -1873,7 +1877,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         if self.channel_list.signalsBlocked():
             return
         self._save_current_group_selection()
-        self.plot_channels()
+        self.plot_channels(preserve_view=True)
 
     def clear_channel_selection_all_groups(self):
         self.group_selection_state = {g: [] for g in self.dataset.get_group_names()}
@@ -2036,7 +2040,8 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         if visible:
             self.update_xy_channel_selectors(prefill=True, preferred_pairs=self._collect_selected_xy_defaults())
         self._update_band_plot()
-    def plot_channels(self):
+    def plot_channels(self, preserve_view=False):
+        current_range = self.plot.getViewBox().viewRange() if preserve_view else None
         self.plot.clear()
 
         self.legend = self.plot.addLegend()
@@ -2070,7 +2075,12 @@ class TdmsPlotter(QtWidgets.QMainWindow):
                 }
                 color_index += 1
 
-        self.plot.autoRange()
+        if preserve_view and current_range is not None:
+            x_range, y_range = current_range
+            self.plot.setXRange(float(x_range[0]), float(x_range[1]), padding=0)
+            self.plot.setYRange(float(y_range[0]), float(y_range[1]), padding=0)
+        else:
+            self.plot.autoRange()
         self.update_xy_channel_selectors(prefill=False)
         self.update_band_views()
 
@@ -2836,6 +2846,51 @@ class TdmsPlotter(QtWidgets.QMainWindow):
                 self.statusBar().showMessage(f"Created {len(new_names)} marker-based average-revolution RMS channel(s)")
             else:
                 self.statusBar().showMessage(f"Created {len(new_names)} moving RMS channel(s), window={marker_window_sec:.4g}s")
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Filter Error", str(e))
+
+
+    def filter_scale_linear(self):
+        try:
+            selected = self._selected_base_channel_names()
+            if not selected:
+                QtWidgets.QMessageBox.information(self, "Filter", "Select at least one channel.")
+                return
+
+            cfg = self.filter_settings["scale_linear"]
+            gain, ok = QtWidgets.QInputDialog.getDouble(
+                self, "Scale Signal", "Gain:",
+                float(cfg.get("gain", 1.0)), -1e12, 1e12, 6
+            )
+            if not ok:
+                return
+
+            offset, ok = QtWidgets.QInputDialog.getDouble(
+                self, "Scale Signal", "Offset:",
+                float(cfg.get("offset", 0.0)), -1e12, 1e12, 6
+            )
+            if not ok:
+                return
+
+            gain = float(gain)
+            offset = float(offset)
+            cfg["gain"] = gain
+            cfg["offset"] = offset
+
+            self._push_undo_state(f"scale linear ({gain:g}, {offset:g})")
+            new_names = []
+            group = self.current_group()
+
+            for ch_name in selected:
+                y = np.asarray(group["channels"][ch_name]["y"], dtype=float)
+                y_new = gain * y + offset
+                new_name = f"{ch_name}_scaled_{gain:g}_{offset:g}"
+                self._create_filtered_channel(ch_name, new_name, y_new)
+                new_names.append(new_name)
+
+            self._refresh_channels_after_processing(new_names)
+            self.update_info_panel()
+            self.statusBar().showMessage(f"Created {len(new_names)} scaled channel(s)")
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Filter Error", str(e))
 
