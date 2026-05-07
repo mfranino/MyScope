@@ -276,7 +276,7 @@ def dataset_from_slab(file_path):
     date_str = find_value("Date")
     file_name_str = find_value("File Name")
 
-    group_name = os.path.splitext(os.path.basename(str(file_name_str or "").strip()))[0]
+    group_name = (measurement or "Measured Data").strip()
     group_props = {
         "Author": measured_by,
         "Project": object_name,
@@ -1850,25 +1850,48 @@ class TdmsPlotter(QtWidgets.QMainWindow):
             self.statusBar().showMessage(f"Statistics table exported: {path}")
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Export Statistics Error", str(e))
+    def _tree_item_kind(self, item):
+        return str(item.data(0, QtCore.Qt.UserRole) or "") if item is not None else ""
+
     def _is_channel_tree_item(self, item):
-        return item is not None and item.parent() is not None
+        return self._tree_item_kind(item) == "channel"
+
+    def _is_group_tree_item(self, item):
+        return self._tree_item_kind(item) == "group"
+
+    def _is_settings_tree_item(self, item):
+        return self._tree_item_kind(item) in ("settings", "time_offset")
+
+    def _tree_top_group_item(self, item):
+        current = item
+        while current is not None and current.parent() is not None:
+            current = current.parent()
+        return current
 
     def _channel_tree_group_name(self, item):
-        if item is None:
-            return ""
-        parent = item.parent()
-        return parent.text(0) if parent is not None else item.text(0)
+        top_item = self._tree_top_group_item(item)
+        return top_item.text(0) if top_item is not None else ""
 
     def _channel_tree_name(self, item):
         if not self._is_channel_tree_item(item):
             return ""
-        return str(item.data(0, QtCore.Qt.UserRole) or "")
+        return str(item.data(0, QtCore.Qt.UserRole + 1) or "")
+
+    def _group_time_offset(self, group_name):
+        group = self.dataset.get_group(group_name)
+        props = group.setdefault("props", {})
+        try:
+            return float(props.get("TimeOffset", 0.0))
+        except Exception:
+            return 0.0
 
     def _iter_channel_tree_items(self):
         for i in range(self.channel_list.topLevelItemCount()):
             group_item = self.channel_list.topLevelItem(i)
             for j in range(group_item.childCount()):
-                yield group_item.child(j)
+                child = group_item.child(j)
+                if self._is_channel_tree_item(child):
+                    yield child
 
     def _capture_group_tree_expansion_state(self):
         state = {}
@@ -1886,15 +1909,31 @@ class TdmsPlotter(QtWidgets.QMainWindow):
 
         for group_name in self.dataset.get_group_names():
             group = self.dataset.get_group(group_name)
+            group.setdefault("props", {})
+            group["props"].setdefault("TimeOffset", 0.0)
+
             group_item = QtWidgets.QTreeWidgetItem([group_name])
+            group_item.setData(0, QtCore.Qt.UserRole, "group")
             group_item.setFlags(QtCore.Qt.ItemIsEnabled)
             self.channel_list.addTopLevelItem(group_item)
+
+            settings_item = QtWidgets.QTreeWidgetItem(["Settings"])
+            settings_item.setData(0, QtCore.Qt.UserRole, "settings")
+            settings_item.setFlags(QtCore.Qt.ItemIsEnabled)
+            group_item.addChild(settings_item)
+
+            offset_value = self._group_time_offset(group_name)
+            offset_item = QtWidgets.QTreeWidgetItem([f"Time offset: {offset_value:g}"])
+            offset_item.setData(0, QtCore.Qt.UserRole, "time_offset")
+            offset_item.setFlags(QtCore.Qt.ItemIsEnabled)
+            settings_item.addChild(offset_item)
 
             for name, data in group["channels"].items():
                 unit = str(data.get("unit", "")).strip()
                 display_name = f"{name} [{unit}]" if unit else name
                 channel_item = QtWidgets.QTreeWidgetItem([display_name])
-                channel_item.setData(0, QtCore.Qt.UserRole, name)
+                channel_item.setData(0, QtCore.Qt.UserRole, "channel")
+                channel_item.setData(0, QtCore.Qt.UserRole + 1, name)
                 channel_item.setFlags(QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable)
                 group_item.addChild(channel_item)
 
@@ -1926,7 +1965,6 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         idx = self.group_combo.findText(group_name)
         if idx >= 0 and idx != self.group_combo.currentIndex():
             self.group_combo.setCurrentIndex(idx)
-
     def _handle_group_change(self):
         if self._last_group_name:
             self._save_current_group_selection_for_name(self._last_group_name)
@@ -2129,7 +2167,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
                     continue
 
                 ch = group_data["channels"][ch_name]
-                x = np.asarray(ch["x"], dtype=float)
+                x = np.asarray(ch["x"], dtype=float) + self._group_time_offset(group_name)
                 y = np.asarray(ch["y"], dtype=float)
 
                 x_plot, y_plot = self._minmax_envelope_downsample(x, y, MAX_PLOT_POINTS_MAIN)
@@ -2779,7 +2817,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
             for ch_name in selected:
                 dt = self._get_dt_for_channel(ch_name)
                 ch = group["channels"][ch_name]
-                x = np.asarray(ch["x"], dtype=float)
+                x = np.asarray(ch["x"], dtype=float) + self._group_time_offset(group_name)
                 y = np.asarray(ch["y"], dtype=float)
 
                 if use_marker and use_instantaneous:
@@ -2867,7 +2905,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
             for ch_name in selected:
                 dt = self._get_dt_for_channel(ch_name)
                 ch = group["channels"][ch_name]
-                x = np.asarray(ch["x"], dtype=float)
+                x = np.asarray(ch["x"], dtype=float) + self._group_time_offset(group_name)
                 y = np.asarray(ch["y"], dtype=float)
 
                 if use_marker and use_instantaneous:
@@ -2966,7 +3004,6 @@ class TdmsPlotter(QtWidgets.QMainWindow):
             self.statusBar().showMessage(f"Created {len(new_names)} scaled channel(s)")
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Filter Error", str(e))
-
     def filter_subtract_mean(self):
         try:
             selected = self._selected_base_channel_names()
@@ -2997,8 +3034,23 @@ class TdmsPlotter(QtWidgets.QMainWindow):
             return
 
         global_pos = self.channel_list.viewport().mapToGlobal(pos)
-        if not self._is_channel_tree_item(item):
+        if self._is_group_tree_item(item):
             self._show_group_actions_menu(item.text(0), global_pos, include_tree_actions=True)
+            return
+
+        if self._is_settings_tree_item(item):
+            group_name = self._channel_tree_group_name(item)
+            menu = QtWidgets.QMenu(self)
+            edit_offset_action = menu.addAction(f"Set time offset for '{group_name}'")
+            reset_offset_action = menu.addAction(f"Reset time offset for '{group_name}'")
+            action = menu.exec_(global_pos)
+            if action == edit_offset_action:
+                self.set_group_time_offset(group_name)
+            elif action == reset_offset_action:
+                self.set_group_time_offset(group_name, new_offset=0.0)
+            return
+
+        if not self._is_channel_tree_item(item):
             return
 
         group_name = self._channel_tree_group_name(item)
@@ -3028,6 +3080,39 @@ class TdmsPlotter(QtWidgets.QMainWindow):
             self.rename_channel(item)
         elif action == delete_action:
             self.delete_channel(item)
+    def set_group_time_offset(self, group_name, new_offset=None):
+        try:
+            group_name = str(group_name).strip()
+            if not group_name or group_name not in self.dataset.groups:
+                return
+
+            current_offset = self._group_time_offset(group_name)
+            if new_offset is None:
+                new_offset, ok = QtWidgets.QInputDialog.getDouble(
+                    self,
+                    "Group Time Offset",
+                    f"Time offset for '{group_name}':",
+                    current_offset,
+                    -1e12,
+                    1e12,
+                    6,
+                )
+                if not ok:
+                    return
+
+            new_offset = float(new_offset)
+            if new_offset == current_offset:
+                return
+
+            self._push_undo_state(f"set time offset {group_name} -> {new_offset:g}")
+            self.dataset.groups[group_name].setdefault("props", {})["TimeOffset"] = new_offset
+            self.populate_channels()
+            self.refresh_group_channel_highlight()
+            self.update_info_panel()
+            self.plot_channels(preserve_view=True)
+            self.statusBar().showMessage(f"Updated time offset: {group_name} -> {new_offset:g}")
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Time Offset Error", str(e))
     def move_channel(self, item, direction):
         try:
             if not self._is_channel_tree_item(item):
@@ -3681,6 +3766,8 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
 
 
 
