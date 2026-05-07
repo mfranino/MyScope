@@ -276,10 +276,11 @@ def dataset_from_slab(file_path):
     date_str = find_value("Date")
     file_name_str = find_value("File Name")
 
-    group_name = (measurement or "Measured Data").strip()
+    group_name = os.path.splitext(os.path.basename(str(file_name_str or "").strip()))[0]
     group_props = {
         "Author": measured_by,
         "Project": object_name,
+        "Measurement": measurement,
         "Date": date_str,
         "Time": time_str,
         "SourceFormat": "sLAB",
@@ -416,6 +417,7 @@ def dataset_from_srm(file_path, repair_missing=False):
     group_props = {
         "Author": measured_by,
         "Project": object_name,
+        "Measurement": measurement,
         "Date": date_str,
         "Time": time_str,
         "SourceFormat": "SRM",
@@ -1535,12 +1537,12 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         else:
             lines.append("  -")
 
-        lines.append("")
-        lines.append(f"Group: {group_name}")
+        lines.append(f"Measurement: {group['props'].get('Measurement', '')}")
+
 
         if group["props"]:
             for k, v in group["props"].items():
-                if k in ("SourceFile", "SamplingRate"):
+                if k in ("SourceFile", "SamplingRate", "Measurement"):
                     continue
                 lines.append(f"{k}: {v}")
 
@@ -3766,6 +3768,8 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
 
 
 
