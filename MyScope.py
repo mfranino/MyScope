@@ -799,6 +799,8 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         self.dataset = SignalDataset()
         self.channel_map = {}
         self.plotted_data = {}
+        self.channel_plot_colors = {}
+        self.legend_entry_targets = []
         self.undo_stack = []
         self.max_undo_steps = 20
         self.group_selection_state = {}
@@ -894,6 +896,8 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         self.dataset = SignalDataset()
         self.channel_map.clear()
         self.plotted_data.clear()
+        self.channel_plot_colors.clear()
+        self.legend_entry_targets = []
         self.undo_stack.clear()
         self.group_selection_state = {}
         self._last_group_name = ""
@@ -924,6 +928,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         self.legend = self.plot.addLegend()
         self.legend.anchor((1, 0), (1, 0))
         self.legend.setOffset((-10, 10))
+        self.plot.scene().sigMouseClicked.connect(self.on_plot_scene_mouse_clicked)
         self.plot.addItem(self.region)
         self.region.setRegion((0.0, 1.0))
         self.region.setVisible(True)
@@ -1026,6 +1031,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         self.legend = self.plot.addLegend()
         self.legend.anchor((1, 0), (1, 0))
         self.legend.setOffset((-10, 10))
+        self.plot.scene().sigMouseClicked.connect(self.on_plot_scene_mouse_clicked)
 
         self.region = pg.LinearRegionItem()
         self.region.sigRegionChanged.connect(self.update_band_views)
@@ -1588,6 +1594,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
 
     def _load_dataset(self, dataset, file_label):
         self.dataset = dataset
+        self.channel_plot_colors = {}
         self.group_selection_state = {
             g: list(self.dataset.get_group(g)["channels"].keys())
             for g in self.dataset.get_group_names()
@@ -2148,6 +2155,90 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         if visible:
             self.update_xy_channel_selectors(prefill=True, preferred_pairs=self._collect_selected_xy_defaults())
         self._update_band_plot()
+
+    def _legend_display_name_at_scene_pos(self, scene_pos):
+        if self.legend is None:
+            return ""
+
+        scene_items = list(self.plot.scene().items(scene_pos))
+
+        def _matches(target):
+            if target is None:
+                return False
+            try:
+                if target.sceneBoundingRect().contains(scene_pos):
+                    return True
+            except Exception:
+                pass
+            for scene_item in scene_items:
+                current = scene_item
+                while current is not None:
+                    if current is target:
+                        return True
+                    current = current.parentItem()
+            return False
+
+        for sample, label, display_name in self.legend_entry_targets:
+            if _matches(sample) or _matches(label):
+                return display_name
+        return ""
+
+    def _current_plot_item_by_display_name(self, display_name):
+        for plot_item in self.plot.listDataItems():
+            if str(getattr(plot_item, "_myscope_display_name", "")).strip() == str(display_name).strip():
+                return plot_item
+        return None
+
+    def on_plot_scene_mouse_clicked(self, ev):
+        if ev.button() != QtCore.Qt.RightButton:
+            return
+        display_name = self._legend_display_name_at_scene_pos(ev.scenePos())
+        if not display_name:
+            return
+        screen_pos = ev.screenPos()
+        global_pos = screen_pos.toPoint() if hasattr(screen_pos, "toPoint") else QtCore.QPoint(int(screen_pos.x()), int(screen_pos.y()))
+        self.show_plot_legend_context_menu(display_name, global_pos)
+        ev.accept()
+
+    def show_plot_legend_context_menu(self, display_name, global_pos):
+        display_name = str(display_name).strip()
+        if not display_name:
+            return
+        menu = QtWidgets.QMenu(self)
+        choose_color_action = menu.addAction(f"Select line color for '{display_name}'")
+        reset_color_action = menu.addAction(f"Reset line color for '{display_name}'")
+        action = menu.exec_(global_pos)
+        if action == choose_color_action:
+            self.select_plot_item_color(display_name)
+        elif action == reset_color_action:
+            self.reset_plot_item_color(display_name)
+
+    def select_plot_item_color(self, display_name):
+        display_name = str(display_name).strip()
+        if not display_name:
+            return
+        plot_item = self._current_plot_item_by_display_name(display_name)
+        if plot_item is None:
+            return
+        current_pen = plot_item.opts.get("pen", pg.mkPen("k"))
+        current_color = pg.mkPen(current_pen).color()
+        color = QtWidgets.QColorDialog.getColor(current_color, self, f"Select line color for {display_name}")
+        if not color.isValid():
+            return
+        self.channel_plot_colors[display_name] = QtGui.QColor(color)
+        plot_item.setPen(pg.mkPen(color))
+        self.update_band_views()
+        self.statusBar().showMessage(f"Updated line color: {display_name}")
+
+    def reset_plot_item_color(self, display_name):
+        display_name = str(display_name).strip()
+        if not display_name:
+            return
+        if display_name in self.channel_plot_colors:
+            del self.channel_plot_colors[display_name]
+        self.plot_channels(preserve_view=True)
+        self.statusBar().showMessage(f"Reset line color: {display_name}")
+
     def plot_channels(self, preserve_view=False):
         current_range = self.plot.getViewBox().viewRange() if preserve_view else None
         self.plot.clear()
@@ -2155,11 +2246,13 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         self.legend = self.plot.addLegend()
         self.legend.anchor((1, 0), (1, 0))
         self.legend.setOffset((-10, 10))
+        self.legend_entry_targets = []
 
         self.plot.addItem(self.region)
         self.region.setVisible(self.band_checkbox.isChecked())
 
         self.plotted_data.clear()
+        plotted_curve_items = []
         color_index = 0
 
         for group_name, group_data in self.dataset.groups.items():
@@ -2175,13 +2268,22 @@ class TdmsPlotter(QtWidgets.QMainWindow):
                 x_plot, y_plot = self._minmax_envelope_downsample(x, y, MAX_PLOT_POINTS_MAIN)
                 display_name = f"{group_name} | {ch_name}"
 
-                self.plot.plot(x_plot, y_plot, pen=pg.intColor(color_index), name=display_name)
+                pen_color = self.channel_plot_colors.get(display_name, pg.intColor(color_index))
+                plot_item = self.plot.plot(x_plot, y_plot, pen=pg.mkPen(pen_color), name=display_name)
+                plot_item._myscope_display_name = display_name
+                plotted_curve_items.append((plot_item, display_name))
                 self.plotted_data[display_name] = {
                     "x": x,
                     "y": y,
                     "unit": ch.get("unit", ""),
                 }
                 color_index += 1
+
+        legend_items = list(getattr(self.legend, "items", []))
+        self.legend_entry_targets = []
+        if len(legend_items) == len(plotted_curve_items):
+            for (sample, label), (_, display_name) in zip(legend_items, plotted_curve_items):
+                self.legend_entry_targets.append((sample, label, display_name))
 
         if preserve_view and current_range is not None:
             x_range, y_range = current_range
@@ -2259,13 +2361,15 @@ class TdmsPlotter(QtWidgets.QMainWindow):
                     continue
 
                 y_common = np.interp(t_common, tyb, yvb)
-                self.band_plot.plot(x_common, y_common, pen=pg.intColor(i), symbol=None, name=f"{y_name} vs {x_name}")
+                pair_color = self.channel_plot_colors.get(y_name, self.channel_plot_colors.get(x_name, pg.intColor(i)))
+                self.band_plot.plot(x_common, y_common, pen=pg.mkPen(pair_color), symbol=None, name=f"{y_name} vs {x_name}")
 
                 if first_x_label is None:
                     x_unit = str(x_data.get("unit", "")).strip()
                     y_unit = str(y_data.get("unit", "")).strip()
                     first_x_label = x_name + (f" [{x_unit}]" if x_unit else "")
                     first_y_label = y_name + (f" [{y_unit}]" if y_unit else "")
+
 
                 plotted_any = True
 
@@ -2296,7 +2400,8 @@ class TdmsPlotter(QtWidgets.QMainWindow):
             yb = y[mask]
             if len(xb) == 0:
                 continue
-            self.band_plot.plot(xb, yb, pen=pg.intColor(i), name=name)
+            line_color = self.channel_plot_colors.get(name, pg.intColor(i))
+            self.band_plot.plot(xb, yb, pen=pg.mkPen(line_color), name=name)
             plotted_any = True
 
         if plotted_any:
@@ -3768,6 +3873,10 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+
 
 
 
