@@ -108,6 +108,45 @@ class CustomViewBox(pg.ViewBox):
         super().wheelEvent(ev, axis=axis)
 
 
+class GroupTreeWidget(QtWidgets.QTreeWidget):
+    groupVisibilityClicked = QtCore.Signal(str)
+    VISIBILITY_ROLE = QtCore.Qt.UserRole + 20
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setIndentation(max(28, self.indentation()))
+        self.setIconSize(QtCore.QSize(16, 16))
+
+    def _is_group_item(self, item):
+        return (
+            item is not None
+            and item.parent() is None
+            and str(item.data(0, QtCore.Qt.UserRole) or "") == "group"
+        )
+
+    def _eye_rect(self, rect):
+        style = self.style()
+        icon_size = self.iconSize().width() or style.pixelMetric(
+            QtWidgets.QStyle.PM_SmallIconSize, None, self
+        )
+        return QtCore.QRect(
+            rect.left() + 2,
+            rect.center().y() - icon_size // 2,
+            icon_size,
+            icon_size,
+        )
+
+    def mousePressEvent(self, event):
+        if event.button() == QtCore.Qt.LeftButton:
+            item = self.itemAt(event.pos())
+            if self._is_group_item(item):
+                row_rect = self.visualItemRect(item)
+                if self._eye_rect(row_rect).contains(event.pos()):
+                    self.groupVisibilityClicked.emit(item.text(0))
+                    event.accept()
+                    return
+        super().mousePressEvent(event)
+
 def _new_single_group_dataset(group_name, group_props=None, channels=None, root_props=None):
     dataset = SignalDataset()
     dataset.root_props = dict(root_props or {})
@@ -804,6 +843,8 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         self.undo_stack = []
         self.max_undo_steps = 20
         self.group_selection_state = {}
+        self.group_visibility_state = {}
+        self._group_visibility_icons = {}
         self._last_group_name = ""
 
         self.filter_settings = {
@@ -900,6 +941,8 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         self.legend_entry_targets = []
         self.undo_stack.clear()
         self.group_selection_state = {}
+        self.group_visibility_state = {}
+        self._group_visibility_icons = {}
         self._last_group_name = ""
 
         self.group_combo.blockSignals(True)
@@ -989,7 +1032,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         self.group_combo.view().setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
         self.group_combo.setObjectName("group_combo")
 
-        self.channel_list = QtWidgets.QTreeWidget()
+        self.channel_list = GroupTreeWidget()
         self.channel_list.setHeaderHidden(True)
         self.channel_list.setSelectionMode(QtWidgets.QAbstractItemView.MultiSelection)
         self.channel_list.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
@@ -1322,6 +1365,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
 
         self.channel_list.itemSelectionChanged.connect(self._on_channel_selection_changed)
         self.channel_list.itemClicked.connect(self.on_channel_tree_item_clicked)
+        self.channel_list.groupVisibilityClicked.connect(self.on_group_visibility_icon_clicked)
         self.clear_channel_selection_button.clicked.connect(self.clear_channel_selection_all_groups)
         self.channel_list.customContextMenuRequested.connect(self.show_channel_context_menu)
 
@@ -1599,6 +1643,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
             g: list(self.dataset.get_group(g)["channels"].keys())
             for g in self.dataset.get_group_names()
         }
+        self.group_visibility_state = {g: True for g in self.dataset.get_group_names()}
         self.file_label.setText(file_label)
 
         self.populate_groups()
@@ -1620,6 +1665,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
 
         for group_name in new_group_names:
             self.group_selection_state.setdefault(group_name, list(self.dataset.get_group(group_name)["channels"].keys()))
+            self.group_visibility_state.setdefault(group_name, True)
 
         self.file_label.setText(f"{len(new_group_names)} groups loaded")
         self.populate_groups()
@@ -1894,6 +1940,45 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         except Exception:
             return 0.0
 
+    def _is_group_visible(self, group_name):
+        return bool(self.group_visibility_state.get(group_name, True))
+
+    def _make_group_visibility_icon(self, visible):
+        key = bool(visible)
+        if key in self._group_visibility_icons:
+            return self._group_visibility_icons[key]
+
+        size = 16
+        pixmap = QtGui.QPixmap(size, size)
+        pixmap.fill(QtCore.Qt.transparent)
+        painter = QtGui.QPainter(pixmap)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        pen = QtGui.QPen(QtGui.QColor(50, 50, 50), 1.6)
+        painter.setPen(pen)
+        painter.setBrush(QtCore.Qt.NoBrush)
+        painter.drawEllipse(QtCore.QRectF(2.0, 4.0, 12.0, 8.0))
+        painter.setBrush(QtGui.QColor(50, 50, 50))
+        painter.drawEllipse(QtCore.QRectF(6.0, 6.0, 4.0, 4.0))
+        if not visible:
+            slash_pen = QtGui.QPen(QtGui.QColor(180, 40, 40), 2.0)
+            painter.setPen(slash_pen)
+            painter.drawLine(3, 13, 13, 3)
+        painter.end()
+
+        icon = QtGui.QIcon(pixmap)
+        self._group_visibility_icons[key] = icon
+        return icon
+
+    def on_group_visibility_icon_clicked(self, group_name):
+        group_name = str(group_name).strip()
+        if not group_name:
+            return
+        self.group_visibility_state[group_name] = not self._is_group_visible(group_name)
+        self.populate_channels()
+        self.refresh_group_channel_highlight()
+        self.plot_channels(preserve_view=True)
+        state_text = "shown" if self._is_group_visible(group_name) else "hidden"
+        self.statusBar().showMessage(f"Group {state_text}: {group_name}")
     def _iter_channel_tree_items(self):
         for i in range(self.channel_list.topLevelItemCount()):
             group_item = self.channel_list.topLevelItem(i)
@@ -1923,6 +2008,8 @@ class TdmsPlotter(QtWidgets.QMainWindow):
 
             group_item = QtWidgets.QTreeWidgetItem([group_name])
             group_item.setData(0, QtCore.Qt.UserRole, "group")
+            group_item.setData(0, GroupTreeWidget.VISIBILITY_ROLE, self._is_group_visible(group_name))
+            group_item.setIcon(0, self._make_group_visibility_icon(self._is_group_visible(group_name)))
             group_item.setFlags(QtCore.Qt.ItemIsEnabled)
             self.channel_list.addTopLevelItem(group_item)
 
@@ -2256,6 +2343,8 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         color_index = 0
 
         for group_name, group_data in self.dataset.groups.items():
+            if not self._is_group_visible(group_name):
+                continue
             selected_channels = self.group_selection_state.get(group_name, [])
             for ch_name in selected_channels:
                 if ch_name not in group_data["channels"]:
@@ -3526,6 +3615,8 @@ class TdmsPlotter(QtWidgets.QMainWindow):
 
             if old_group_name in self.group_selection_state:
                 self.group_selection_state[new_group_name] = self.group_selection_state.pop(old_group_name)
+            if old_group_name in self.group_visibility_state:
+                self.group_visibility_state[new_group_name] = self.group_visibility_state.pop(old_group_name)
 
             if self._last_group_name == old_group_name:
                 self._last_group_name = new_group_name
@@ -3564,6 +3655,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
 
             del self.dataset.groups[group_name]
             self.group_selection_state.pop(group_name, None)
+            self.group_visibility_state.pop(group_name, None)
 
             if not self.dataset.has_groups():
                 self.group_combo.blockSignals(True)
@@ -3670,6 +3762,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
             "current_group": self.current_group_name(),
             "last_group_name": self._last_group_name,
             "group_selection_state": self.group_selection_state,
+            "group_visibility_state": self.group_visibility_state,
             "filter_settings": self.filter_settings,
             "notes": self.notes_box.toPlainText(),
             "band": {
@@ -3720,6 +3813,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
 
     def _apply_project_state(self, state):
         self.group_selection_state = copy.deepcopy(state.get("group_selection_state", {}))
+        self.group_visibility_state = copy.deepcopy(state.get("group_visibility_state", {}))
         self.filter_settings = copy.deepcopy(state.get("filter_settings", self.filter_settings))
         self.notes_box.setPlainText(str(state.get("notes", "")))
 
@@ -3873,6 +3967,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
