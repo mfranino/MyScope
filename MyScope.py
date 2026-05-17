@@ -1650,7 +1650,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         self.populate_channels()
         self.refresh_group_channel_highlight()
         self.update_info_panel()
-        self.plot_channels()
+        self.plot_channels(preserve_view=True)
 
         self._last_group_name = self.current_group_name()
         self.statusBar().showMessage(f"Loaded: {file_label}")
@@ -1679,7 +1679,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         self.populate_channels()
         self.refresh_group_channel_highlight()
         self.update_info_panel()
-        self.plot_channels()
+        self.plot_channels(preserve_view=True)
         self._last_group_name = self.current_group_name()
         self.statusBar().showMessage(f"Added file: {file_path}")
 
@@ -1995,6 +1995,13 @@ class TdmsPlotter(QtWidgets.QMainWindow):
                 state[item.text(0)] = bool(item.isExpanded())
         return state
 
+    def _apply_group_tree_expansion_state(self, state):
+        state = dict(state or {})
+        for i in range(self.channel_list.topLevelItemCount()):
+            item = self.channel_list.topLevelItem(i)
+            if item is not None:
+                item.setExpanded(bool(state.get(item.text(0), False)))
+
     def populate_channels(self):
         expanded_state = self._capture_group_tree_expansion_state()
         self.channel_list.blockSignals(True)
@@ -2069,7 +2076,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         self.populate_channels()
         self.refresh_group_channel_highlight()
         self.update_info_panel()
-        self.plot_channels()
+        self.plot_channels(preserve_view=True)
         self._last_group_name = current
 
     def _on_channel_selection_changed(self):
@@ -2082,7 +2089,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         self.group_selection_state = {g: [] for g in self.dataset.get_group_names()}
         self.refresh_group_channel_highlight()
         self.update_info_panel()
-        self.plot_channels()
+        self.plot_channels(preserve_view=True)
 
     def _save_current_group_selection(self):
         self._save_current_group_selection_for_name(self.current_group_name())
@@ -2585,7 +2592,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         self.group_selection_state[group_name] = list(new_channel_names)
         self.populate_channels()
         self.refresh_group_channel_highlight()
-        self.plot_channels()
+        self.plot_channels(preserve_view=True)
 
     def _get_dt_for_channel(self, channel_name):
         group = self.current_group()
@@ -3332,7 +3339,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
 
             self.populate_channels()
             self.refresh_group_channel_highlight()
-            self.plot_channels()
+            self.plot_channels(preserve_view=True)
             self.update_info_panel()
             self.statusBar().showMessage(f"Moved channel: {channel_name}")
         except Exception as e:
@@ -3369,7 +3376,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
 
             self.populate_channels()
             self.refresh_group_channel_highlight()
-            self.plot_channels()
+            self.plot_channels(preserve_view=True)
             self.update_info_panel()
             self.statusBar().showMessage(f"Renamed channel: {old_name} -> {new_name}")
         except Exception as e:
@@ -3405,7 +3412,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
 
             self.populate_channels()
             self.refresh_group_channel_highlight()
-            self.plot_channels()
+            self.plot_channels(preserve_view=True)
             self.update_info_panel()
             self.statusBar().showMessage(f"Deleted channel: {display_name}")
         except Exception as e:
@@ -3434,6 +3441,10 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         idx = items.index(group_name) if group_name in items else -1
 
         menu = QtWidgets.QMenu(self)
+        select_all_channels_action = menu.addAction("Select all channels") if include_tree_actions else None
+        unselect_all_channels_action = menu.addAction("Unselect all channels") if include_tree_actions else None
+        if include_tree_actions:
+            menu.addSeparator()
         move_up_action = menu.addAction("Move up")
         move_down_action = menu.addAction("Move down")
         move_top_action = menu.addAction("Move to top")
@@ -3451,7 +3462,11 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         delete_action = menu.addAction(f"Delete group '{group_name}'")
 
         action = menu.exec_(global_pos)
-        if action == move_up_action:
+        if action == select_all_channels_action:
+            self.select_all_channels_in_group(group_name)
+        elif action == unselect_all_channels_action:
+            self.unselect_all_channels_in_group(group_name)
+        elif action == move_up_action:
             self.move_group(group_name, -1)
         elif action == move_down_action:
             self.move_group(group_name, 1)
@@ -3467,6 +3482,43 @@ class TdmsPlotter(QtWidgets.QMainWindow):
             self.rename_group(group_name)
         elif action == delete_action:
             self.delete_group(group_name)
+
+    def select_all_channels_in_group(self, group_name):
+        try:
+            group_name = str(group_name).strip()
+            if not group_name or group_name not in self.dataset.groups:
+                return
+
+            ordered_names = list(self.dataset.get_group(group_name)["channels"].keys())
+            if not ordered_names:
+                return
+
+            self._push_undo_state(f"select all channels in {group_name}")
+            self.group_selection_state[group_name] = list(ordered_names)
+            self.refresh_group_channel_highlight()
+            self.update_info_panel()
+            self.plot_channels(preserve_view=True)
+            self.statusBar().showMessage(f"Selected all channels: {group_name}")
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Select All Channels Error", str(e))
+
+    def unselect_all_channels_in_group(self, group_name):
+        try:
+            group_name = str(group_name).strip()
+            if not group_name or group_name not in self.dataset.groups:
+                return
+
+            if not self.group_selection_state.get(group_name, []):
+                return
+
+            self._push_undo_state(f"unselect all channels in {group_name}")
+            self.group_selection_state[group_name] = []
+            self.refresh_group_channel_highlight()
+            self.update_info_panel()
+            self.plot_channels(preserve_view=True)
+            self.statusBar().showMessage(f"Unselected all channels: {group_name}")
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Unselect All Channels Error", str(e))
 
     def collapse_all_group_nodes(self):
         for i in range(self.channel_list.topLevelItemCount()):
@@ -3506,7 +3558,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
             self.populate_channels()
             self.refresh_group_channel_highlight()
             self.update_info_panel()
-            self.plot_channels()
+            self.plot_channels(preserve_view=True)
             self.statusBar().showMessage("Groups sorted descending")
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Sort Groups Error", f"Could not sort groups.\n\n{e}")
@@ -3541,7 +3593,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
             self.populate_channels()
             self.refresh_group_channel_highlight()
             self.update_info_panel()
-            self.plot_channels()
+            self.plot_channels(preserve_view=True)
             edge_name = "top" if to_top else "bottom"
             self.statusBar().showMessage(f"Moved group to {edge_name}: {group_name}")
         except Exception as e:
@@ -3574,7 +3626,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
             self.populate_channels()
             self.refresh_group_channel_highlight()
             self.update_info_panel()
-            self.plot_channels()
+            self.plot_channels(preserve_view=True)
             self.statusBar().showMessage(f"Moved group: {group_name}")
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Move Group Error", f"Could not move group.\n\n{e}")
@@ -3629,7 +3681,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
             self.populate_channels()
             self.refresh_group_channel_highlight()
             self.update_info_panel()
-            self.plot_channels()
+            self.plot_channels(preserve_view=True)
             self.statusBar().showMessage(f"Renamed group: {old_group_name} -> {new_group_name}")
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Rename Group Error", f"Could not rename group.\n\n{e}")
@@ -3698,7 +3750,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
             self.populate_channels()
             self.refresh_group_channel_highlight()
             self.update_info_panel()
-            self.plot_channels()
+            self.plot_channels(preserve_view=True)
             self._last_group_name = self.current_group_name().strip()
             self.statusBar().showMessage(f"Deleted group: {group_name}")
         except Exception as e:
@@ -3763,6 +3815,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
             "last_group_name": self._last_group_name,
             "group_selection_state": self.group_selection_state,
             "group_visibility_state": self.group_visibility_state,
+            "group_tree_expansion_state": self._capture_group_tree_expansion_state(),
             "filter_settings": self.filter_settings,
             "notes": self.notes_box.toPlainText(),
             "band": {
@@ -3814,6 +3867,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
     def _apply_project_state(self, state):
         self.group_selection_state = copy.deepcopy(state.get("group_selection_state", {}))
         self.group_visibility_state = copy.deepcopy(state.get("group_visibility_state", {}))
+        group_tree_expansion_state = copy.deepcopy(state.get("group_tree_expansion_state", {}))
         self.filter_settings = copy.deepcopy(state.get("filter_settings", self.filter_settings))
         self.notes_box.setPlainText(str(state.get("notes", "")))
 
@@ -3842,6 +3896,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
             self._apply_widget_state(widget, widgets_state[name])
 
         self.populate_channels()
+        self._apply_group_tree_expansion_state(group_tree_expansion_state)
         self.refresh_group_channel_highlight()
         self.plot_channels()
 
