@@ -1080,6 +1080,39 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         self.region.sigRegionChanged.connect(self.update_band_views)
         self.plot.addItem(self.region)
 
+        main_axis_controls_widget = QtWidgets.QWidget()
+        main_axis_controls_layout = QtWidgets.QHBoxLayout(main_axis_controls_widget)
+        main_axis_controls_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.main_x_min_spin = QtWidgets.QDoubleSpinBox()
+        self.main_x_max_spin = QtWidgets.QDoubleSpinBox()
+        self.main_y_min_spin = QtWidgets.QDoubleSpinBox()
+        self.main_y_max_spin = QtWidgets.QDoubleSpinBox()
+        self.main_axis_apply_button = QtWidgets.QPushButton("Apply")
+        self.main_axis_apply_button.setObjectName("main_axis_apply_button")
+
+        for widget, name in (
+            (self.main_x_min_spin, "main_x_min_spin"),
+            (self.main_x_max_spin, "main_x_max_spin"),
+            (self.main_y_min_spin, "main_y_min_spin"),
+            (self.main_y_max_spin, "main_y_max_spin"),
+        ):
+            widget.setObjectName(name)
+            widget.setDecimals(1)
+            widget.setRange(-1e12, 1e12)
+            widget.setMinimumWidth(42)
+
+        main_axis_controls_layout.addWidget(QtWidgets.QLabel("X axis range:"))
+        main_axis_controls_layout.addWidget(self.main_x_min_spin)
+        main_axis_controls_layout.addWidget(self.main_x_max_spin)
+        main_axis_controls_layout.addSpacing(10)
+        main_axis_controls_layout.addWidget(QtWidgets.QLabel("Y axis range:"))
+        main_axis_controls_layout.addWidget(self.main_y_min_spin)
+        main_axis_controls_layout.addWidget(self.main_y_max_spin)
+        main_axis_controls_layout.addSpacing(10)
+        main_axis_controls_layout.addWidget(self.main_axis_apply_button)
+        main_axis_controls_layout.addStretch()
+
         self.band_plot = pg.PlotWidget()
         self.band_plot.showGrid(x=True, y=True)
         self.band_plot.setBackground("w")
@@ -1177,8 +1210,14 @@ class TdmsPlotter(QtWidgets.QMainWindow):
 
         band_bottom_layout.addWidget(self.xy_splitter)
 
+        main_plot_widget = QtWidgets.QWidget()
+        main_plot_layout = QtWidgets.QVBoxLayout(main_plot_widget)
+        main_plot_layout.setContentsMargins(0, 0, 0, 0)
+        main_plot_layout.addWidget(self.plot)
+        main_plot_layout.addWidget(main_axis_controls_widget)
+
         self.plot_splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
-        self.plot_splitter.addWidget(self.plot)
+        self.plot_splitter.addWidget(main_plot_widget)
         self.plot_splitter.addWidget(band_bottom_widget)
         self.plot_splitter.setSizes([720, 280])
         self.plot_splitter.setChildrenCollapsible(False)
@@ -1385,6 +1424,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         self.bottom_autoscale_y_once_button.clicked.connect(self.auto_scale_bottom_y_once)
         self.bottom_enable_autoscale_y_checkbox.toggled.connect(self.on_bottom_enable_autoscale_y_toggled)
         self.band_axis_apply_button.clicked.connect(self.apply_band_axis_ranges)
+        self.main_axis_apply_button.clicked.connect(self.apply_main_axis_ranges)
 
     def update_bottom_y_controls_visibility(self):
         autoscale_enabled = self.bottom_enable_autoscale_y_checkbox.isChecked()
@@ -1536,6 +1576,26 @@ class TdmsPlotter(QtWidgets.QMainWindow):
             self.statusBar().showMessage("Band plot axis ranges applied")
         except Exception as e:
             QtWidgets.QMessageBox.warning(self, "Band Axis Range Error", str(e))
+
+    def apply_main_axis_ranges(self):
+        try:
+            x_min = float(self.main_x_min_spin.value())
+            x_max = float(self.main_x_max_spin.value())
+            y_min = float(self.main_y_min_spin.value())
+            y_max = float(self.main_y_max_spin.value())
+
+            if x_max <= x_min:
+                raise RuntimeError("X axis max must be greater than X axis min.")
+            if y_max <= y_min:
+                raise RuntimeError("Y axis max must be greater than Y axis min.")
+
+            self.plot.enableAutoRange(axis="x", enable=False)
+            self.plot.enableAutoRange(axis="y", enable=False)
+            self.plot.setXRange(x_min, x_max, padding=0)
+            self.plot.setYRange(y_min, y_max, padding=0)
+            self.statusBar().showMessage("Main plot axis ranges applied")
+        except Exception as e:
+            QtWidgets.QMessageBox.warning(self, "Main Axis Range Error", str(e))
 
     def toggle_band(self, checked):
         try:
