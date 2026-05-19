@@ -257,11 +257,16 @@ def _decimal_resolution(token):
 
 
 
-def dataset_from_tdms(tdms_file):
+def dataset_from_tdms(tdms_file, progress_callback=None, cancel_check=None):
     dataset = SignalDataset()
     dataset.root_props = dict(tdms_file.properties)
 
-    for group in tdms_file.groups():
+    groups = list(tdms_file.groups())
+    total_groups = len(groups)
+
+    for idx, group in enumerate(groups, start=1):
+        if cancel_check is not None and cancel_check():
+            raise RuntimeError("TDMS import canceled.")
         channels = {}
         for ch in group.channels():
             y = np.asarray(ch[:], dtype=float)
@@ -279,6 +284,8 @@ def dataset_from_tdms(tdms_file):
             }
 
         dataset.add_group(group.name, group_props=dict(group.properties), channels=channels)
+        if progress_callback is not None:
+            progress_callback(idx, total_groups, group.name)
 
     return dataset
 
@@ -725,6 +732,127 @@ def dataset_from_vib(file_path):
     return _new_single_group_dataset(group_name, group_props=group_props, channels=channels, root_props=root_props)
 
 
+def dataset_from_vis(file_path):
+    encodings = ("utf-8-sig", "cp1250", "latin-1")
+    last_error = None
+    lines = None
+    for encoding in encodings:
+        try:
+            with open(file_path, "r", encoding=encoding) as f:
+                lines = f.readlines()
+            break
+        except UnicodeDecodeError as e:
+            last_error = e
+    if lines is None:
+        raise RuntimeError(f"Could not decode VIS file: {last_error}")
+
+    lines = [line.rstrip("\r\n") for line in lines]
+    if len(lines) < 9:
+        raise RuntimeError("VIS file is too short.")
+
+    header_props = {}
+    data_header_idx = None
+    for i, line in enumerate(lines):
+        s = line.strip()
+        if not s:
+            continue
+        if s.startswith("$"):
+            parts = s.split(":", 1)
+            key = parts[0][1:].strip()
+            value = parts[1].strip() if len(parts) > 1 else ""
+            header_props[key] = value
+            continue
+        if "Time" in s and "[" not in s:
+            data_header_idx = i
+            break
+
+    if data_header_idx is None or data_header_idx + 1 >= len(lines):
+        raise RuntimeError("VIS column header row not found.")
+
+    units_idx = data_header_idx + 1
+    column_names_raw = re.findall(r"\S+", lines[data_header_idx].strip())
+    unit_tokens = re.findall(r"\[[^\]]*\]", lines[units_idx].strip())
+    if not column_names_raw:
+        raise RuntimeError("VIS file contains no column names.")
+    if len(unit_tokens) != len(column_names_raw):
+        raise RuntimeError("VIS units row does not match the column count.")
+
+    if column_names_raw[0].lower() != "time":
+        raise RuntimeError("VIS first column must be Time.")
+
+    seen_names = {}
+    column_names = []
+    for idx, name in enumerate(column_names_raw):
+        base_name = str(name).strip() or f"col_{idx}"
+        if idx == 0:
+            column_names.append("Time")
+            continue
+        seen_names[base_name] = seen_names.get(base_name, 0) + 1
+        suffix = seen_names[base_name]
+        column_names.append(base_name if suffix == 1 else f"{base_name}_{suffix}")
+
+    rows = []
+    for line in lines[units_idx + 1:]:
+        s = line.strip()
+        if not s:
+            continue
+        parts = re.findall(r"\S+", s)
+        if len(parts) != len(column_names):
+            continue
+        try:
+            rows.append([float(p.replace(",", ".")) for p in parts])
+        except ValueError:
+            continue
+
+    if not rows:
+        raise RuntimeError("No valid VIS data rows found.")
+
+    data = np.asarray(rows, dtype=float)
+    t_raw = data[:, 0]
+    keep_mask = np.ones(len(t_raw), dtype=bool)
+    for idx in range(1, len(t_raw)):
+        if not np.isfinite(t_raw[idx]) or t_raw[idx] <= t_raw[idx - 1]:
+            keep_mask[idx] = False
+    data = data[keep_mask]
+    t = data[:, 0]
+    if len(t) < 2:
+        raise RuntimeError("Not enough VIS samples.")
+
+    diffs = np.diff(t)
+    dt = float(np.median(diffs))
+    max_dev = float(np.max(np.abs(diffs - dt)))
+    tol = max(1e-9, abs(dt) * 1e-6)
+    if max_dev > tol:
+        raise RuntimeError("VIS time is not uniformly sampled; cannot prepare waveform export safely.")
+
+    group_name = os.path.splitext(os.path.basename(file_path))[0]
+    group_props = {
+        "Title": header_props.get("TITRE"),
+        "SourceFormat": "VIS",
+        "NBCOL": header_props.get("NBCOL"),
+        "ABCISSE": header_props.get("ABCISSE"),
+        "FEN1": header_props.get("FEN1"),
+        "FEN2": header_props.get("FEN2"),
+        "FEN3": header_props.get("FEN3"),
+    }
+    group_props = {k: v for k, v in group_props.items() if v not in (None, "")}
+    root_props = {"SourceFile": file_path}
+
+    channels = {}
+    for idx, name in enumerate(column_names[1:], start=1):
+        y = data[:, idx]
+        if len(y) == 0 or np.all(np.isnan(y)):
+            continue
+        unit = unit_tokens[idx].strip()[1:-1].strip() if idx < len(unit_tokens) else ""
+        channels[name] = {
+            "x": t.copy(),
+            "y": y,
+            "unit": unit,
+        }
+
+    return _new_single_group_dataset(group_name, group_props=group_props, channels=channels, root_props=root_props)
+
+
 def merge_datasets(base_dataset, incoming_dataset):
     if incoming_dataset.root_props and not base_dataset.root_props:
         base_dataset.root_props = dict(incoming_dataset.root_props)
@@ -1022,6 +1150,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         self.open_slab_button = QtWidgets.QPushButton("Open sLAB")
         self.open_srm_button = QtWidgets.QPushButton("Open SRM")
         self.open_vib_button = QtWidgets.QPushButton("Open VIB")
+        self.open_vis_button = QtWidgets.QPushButton("Open VIS")
 
         self.file_label = QtWidgets.QLabel("No file loaded")
         self.file_label.setWordWrap(True)
@@ -1050,6 +1179,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         left.addWidget(self.open_slab_button)
         left.addWidget(self.open_srm_button)
         left.addWidget(self.open_vib_button)
+        left.addWidget(self.open_vis_button)
         left.addWidget(self.file_label)
         left.addLayout(channels_header)
         left.addWidget(self.channel_list)
@@ -1294,6 +1424,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         self.action_open_slab = QtWidgets.QAction("Open sLAB File", self)
         self.action_open_srm = QtWidgets.QAction("Open SRM File", self)
         self.action_open_vib = QtWidgets.QAction("Open VIB File", self)
+        self.action_open_vis = QtWidgets.QAction("Open VIS File", self)
         self.action_open_project = QtWidgets.QAction("Open Project...", self)
         self.action_save_project = QtWidgets.QAction("Save Project...", self)
         self.action_save_project.setShortcut(QtGui.QKeySequence.Save)
@@ -1337,6 +1468,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         file_menu.addAction(self.action_open_slab)
         file_menu.addAction(self.action_open_srm)
         file_menu.addAction(self.action_open_vib)
+        file_menu.addAction(self.action_open_vis)
         file_menu.addSeparator()
         file_menu.addAction(self.action_open_project)
         file_menu.addAction(self.action_save_project)
@@ -1376,12 +1508,14 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         self.open_slab_button.clicked.connect(self.open_slab)
         self.open_srm_button.clicked.connect(self.open_srm)
         self.open_vib_button.clicked.connect(self.open_vib)
+        self.open_vis_button.clicked.connect(self.open_vis)
 
         self.action_new_project.triggered.connect(self.new_project)
         self.action_open_tdms.triggered.connect(self.open_tdms)
         self.action_open_slab.triggered.connect(self.open_slab)
         self.action_open_srm.triggered.connect(self.open_srm)
         self.action_open_vib.triggered.connect(self.open_vib)
+        self.action_open_vis.triggered.connect(self.open_vis)
         self.action_open_project.triggered.connect(self.open_project)
         self.action_save_project.triggered.connect(self.save_project)
         self.action_export_dataset.triggered.connect(self.export_dataset)
@@ -1696,13 +1830,19 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         elif self.group_combo.count() > 0:
             self.group_combo.setCurrentIndex(0)
 
-    def _load_dataset(self, dataset, file_label):
+    def _load_dataset(self, dataset, file_label, select_all_channels=True):
         self.dataset = dataset
         self.channel_plot_colors = {}
-        self.group_selection_state = {
-            g: list(self.dataset.get_group(g)["channels"].keys())
-            for g in self.dataset.get_group_names()
-        }
+        if select_all_channels:
+            self.group_selection_state = {
+                g: list(self.dataset.get_group(g)["channels"].keys())
+                for g in self.dataset.get_group_names()
+            }
+        else:
+            self.group_selection_state = {
+                g: []
+                for g in self.dataset.get_group_names()
+            }
         self.group_visibility_state = {g: True for g in self.dataset.get_group_names()}
         self.file_label.setText(file_label)
 
@@ -1749,8 +1889,46 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         else:
             self._load_dataset(dataset, path)
 
+    def _load_tdms_dataset_with_group_progress(self, path, *, title="Open TDMS"):
+        tdms_file = TdmsFile.read(path)
+        groups = list(tdms_file.groups())
+        progress = QtWidgets.QProgressDialog("Opening TDMS groups...", "Cancel", 0, max(1, len(groups)), self)
+        progress.setWindowTitle(title)
+        progress.setWindowModality(QtCore.Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
+
+        def on_group_loaded(index, total_groups, group_name):
+            progress.setMaximum(max(1, total_groups))
+            progress.setLabelText(
+                f"Loading TDMS group {index} of {total_groups}\n{group_name}\n{path}"
+            )
+            progress.setValue(index)
+            QtWidgets.QApplication.processEvents()
+
+        try:
+            dataset = dataset_from_tdms(
+                tdms_file,
+                progress_callback=on_group_loaded,
+                cancel_check=progress.wasCanceled,
+            )
+        except RuntimeError as e:
+            if str(e) == "TDMS import canceled." or progress.wasCanceled():
+                progress.close()
+                self.statusBar().showMessage("Open TDMS canceled")
+                return False
+            progress.close()
+            raise
+        finally:
+            if progress.isVisible():
+                progress.close()
+
+        return dataset
+
     def _import_tdms_file(self, path):
-        dataset = dataset_from_tdms(TdmsFile.read(path))
+        dataset = self._load_tdms_dataset_with_group_progress(path, title="Open TDMS")
+        if dataset is False:
+            return False
         self._add_loaded_dataset(dataset, path)
 
 
@@ -1856,6 +2034,21 @@ class TdmsPlotter(QtWidgets.QMainWindow):
             self._open_files_with_progress(paths, "VIB", self._import_vib_file)
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "VIB Import Error", str(e))
+
+    def _import_vis_file(self, path):
+        dataset = dataset_from_vis(path)
+        self._add_loaded_dataset(dataset, path)
+
+    def open_vis(self):
+        paths, _ = QtWidgets.QFileDialog.getOpenFileNames(
+            self, "Open VIS File", "", "VIS files (*.vis *.VIS);;All files (*.*)"
+        )
+        if not paths:
+            return
+        try:
+            self._open_files_with_progress(paths, "VIS", self._import_vis_file)
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "VIS Import Error", str(e))
 
     def export_dataset(self):
         try:
@@ -3066,6 +3259,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
             if cfg is None:
                 return
 
+            group_name = self.current_group_name().strip()
             group = self.current_group()
             use_marker, use_instantaneous, marker_edges_idx, marker_window_sec, mt = self._prepare_marker_window(group, cfg)
 
@@ -4060,8 +4254,10 @@ class TdmsPlotter(QtWidgets.QMainWindow):
             if not os.path.exists(tdms_path):
                 raise RuntimeError(f"Referenced TDMS file not found:\n{tdms_path}")
 
-            dataset = dataset_from_tdms(TdmsFile.read(tdms_path))
-            self._load_dataset(dataset, tdms_path)
+            dataset = self._load_tdms_dataset_with_group_progress(tdms_path, title="Open Project")
+            if dataset is False:
+                return
+            self._load_dataset(dataset, tdms_path, select_all_channels=False)
             self._apply_project_state(state)
             self.update_info_panel()
 
