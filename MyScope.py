@@ -1088,6 +1088,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         self.band_label.setText("X1: -, X2: -, dX: -")
 
         self.band_checkbox.setChecked(True)
+        self.band_fft_checkbox.setChecked(False)
         self.xy_mode_checkbox.setChecked(False)
         self.xy_pair_count_spin.setValue(2)
         self._set_xy_pair_count(self.xy_pair_count_spin.value())
@@ -1258,6 +1259,8 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         self.band_legend.anchor((1, 0), (1, 0))
         self.band_legend.setOffset((-10, 10))
 
+        self.band_fft_checkbox = QtWidgets.QCheckBox("FFT")
+        self.band_fft_checkbox.setObjectName("band_fft_checkbox")
         self.xy_mode_checkbox = QtWidgets.QCheckBox("XY plot")
         self.xy_mode_checkbox.setObjectName("xy_mode_checkbox")
 
@@ -1284,6 +1287,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         xy_controls_layout.setContentsMargins(4, 4, 4, 4)
 
         top_controls_row = QtWidgets.QHBoxLayout()
+        top_controls_row.addWidget(self.band_fft_checkbox)
         top_controls_row.addWidget(self.xy_mode_checkbox)
         top_controls_row.addWidget(self.xy_pair_count_spin)
         top_controls_row.addStretch()
@@ -1556,12 +1560,14 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         self.action_bottom_y_autoscale.triggered.connect(self.auto_scale_bottom_y_once)
 
         self.band_checkbox.toggled.connect(self.toggle_band)
+        self.band_fft_checkbox.toggled.connect(self.on_band_fft_checkbox_toggled)
         self.xy_mode_checkbox.toggled.connect(self.toggle_xy_mode)
         self.xy_pair_count_spin.valueChanged.connect(self._on_xy_pair_count_changed)
         self.bottom_autoscale_y_once_button.clicked.connect(self.auto_scale_bottom_y_once)
         self.bottom_enable_autoscale_y_checkbox.toggled.connect(self.on_bottom_enable_autoscale_y_toggled)
         self.band_axis_apply_button.clicked.connect(self.apply_band_axis_ranges)
         self.main_axis_apply_button.clicked.connect(self.apply_main_axis_ranges)
+        self._connect_band_fft_checkbox()
 
     def update_bottom_y_controls_visibility(self):
         autoscale_enabled = self.bottom_enable_autoscale_y_checkbox.isChecked()
@@ -1673,6 +1679,64 @@ class TdmsPlotter(QtWidgets.QMainWindow):
             return float(y_range[0]), float(y_range[1])
         except Exception:
             return None
+
+    def _preserve_band_plot_x_range(self):
+        try:
+            vb = self.band_plot.getViewBox()
+            x_range = vb.viewRange()[0]
+            return float(x_range[0]), float(x_range[1])
+        except Exception:
+            return None
+
+    def _restore_band_plot_x_range(self, x_range):
+        if x_range is None:
+            return
+        x0, x1 = x_range
+        self.band_plot.setXRange(x0, x1, padding=0)
+
+    def _band_fft_enabled(self):
+        try:
+            ctrl = getattr(self.band_plot.plotItem, "ctrl", None)
+            fft_check = getattr(ctrl, "fftCheck", None)
+            if fft_check is not None:
+                return bool(fft_check.isChecked())
+        except Exception:
+            pass
+        return False
+
+    def _connect_band_fft_checkbox(self):
+        try:
+            ctrl = getattr(self.band_plot.plotItem, "ctrl", None)
+            fft_check = getattr(ctrl, "fftCheck", None)
+            if fft_check is None:
+                return
+            if not getattr(self, "_band_fft_sync_connected", False):
+                fft_check.toggled.connect(self.sync_band_fft_checkbox_from_plot)
+                self._band_fft_sync_connected = True
+            self.sync_band_fft_checkbox_from_plot()
+        except Exception:
+            pass
+
+    def sync_band_fft_checkbox_from_plot(self):
+        checked = self._band_fft_enabled()
+        blocker = QtCore.QSignalBlocker(self.band_fft_checkbox)
+        self.band_fft_checkbox.setChecked(checked)
+        del blocker
+
+    def on_band_fft_checkbox_toggled(self, checked):
+        try:
+            ctrl = getattr(self.band_plot.plotItem, "ctrl", None)
+            fft_check = getattr(ctrl, "fftCheck", None)
+            if fft_check is None:
+                blocker = QtCore.QSignalBlocker(self.band_fft_checkbox)
+                self.band_fft_checkbox.setChecked(False)
+                del blocker
+                return
+            if bool(fft_check.isChecked()) != bool(checked):
+                fft_check.setChecked(bool(checked))
+            self._update_band_plot()
+        except Exception:
+            self.sync_band_fft_checkbox_from_plot()
 
     def _restore_band_plot_y_range(self, y_range):
         if y_range is None:
@@ -2666,6 +2730,8 @@ class TdmsPlotter(QtWidgets.QMainWindow):
 
     def _update_band_plot(self):
         autoscale_y_enabled = self.bottom_enable_autoscale_y_checkbox.isChecked()
+        fft_enabled = self._band_fft_enabled()
+        x_range_before = self._preserve_band_plot_x_range() if fft_enabled else None
         y_range_before = None if autoscale_y_enabled else self._preserve_band_plot_y_range()
 
         self.band_plot.clear()
@@ -2746,7 +2812,11 @@ class TdmsPlotter(QtWidgets.QMainWindow):
             if plotted_any:
                 self.band_plot.setLabel("bottom", first_x_label or "X")
                 self.band_plot.setLabel("left", first_y_label or "Y")
-                self.band_plot.enableAutoRange(axis="x", enable=True)
+                if fft_enabled:
+                    self.band_plot.enableAutoRange(axis="x", enable=False)
+                    self._restore_band_plot_x_range(x_range_before)
+                else:
+                    self.band_plot.enableAutoRange(axis="x", enable=True)
                 if autoscale_y_enabled:
                     self.band_plot.enableAutoRange(axis="y", enable=True)
                     self.band_plot.autoRange()
@@ -2775,7 +2845,11 @@ class TdmsPlotter(QtWidgets.QMainWindow):
             plotted_any = True
 
         if plotted_any:
-            self.band_plot.enableAutoRange(axis="x", enable=True)
+            if fft_enabled:
+                self.band_plot.enableAutoRange(axis="x", enable=False)
+                self._restore_band_plot_x_range(x_range_before)
+            else:
+                self.band_plot.enableAutoRange(axis="x", enable=True)
             if autoscale_y_enabled:
                 self.band_plot.enableAutoRange(axis="y", enable=True)
                 self.band_plot.autoRange()
