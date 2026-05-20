@@ -1456,6 +1456,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         self.action_moving_pkpk = QtWidgets.QAction("Moving Window Pk-Pk...", self)
         self.action_moving_rms = QtWidgets.QAction("Moving Window RMS...", self)
         self.action_scale_linear = QtWidgets.QAction("Scale...", self)
+        self.action_subtract_channels = QtWidgets.QAction("Subtract...", self)
         self.action_subtract_mean = QtWidgets.QAction("Subtract Mean", self)
 
     def _build_menus(self):
@@ -1501,6 +1502,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         filter_menu.addAction(self.action_moving_pkpk)
         filter_menu.addAction(self.action_moving_rms)
         filter_menu.addAction(self.action_scale_linear)
+        filter_menu.addAction(self.action_subtract_channels)
         filter_menu.addAction(self.action_subtract_mean)
 
     def _connect_signals(self):
@@ -1530,6 +1532,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         self.action_moving_pkpk.triggered.connect(self.filter_moving_window_pkpk)
         self.action_moving_rms.triggered.connect(self.filter_moving_window_rms)
         self.action_scale_linear.triggered.connect(self.filter_scale_linear)
+        self.action_subtract_channels.triggered.connect(self.filter_subtract_channels)
         self.action_subtract_mean.triggered.connect(self.filter_subtract_mean)
 
         self.group_combo.currentIndexChanged.connect(self._handle_group_change)
@@ -1890,13 +1893,20 @@ class TdmsPlotter(QtWidgets.QMainWindow):
             self._load_dataset(dataset, path)
 
     def _load_tdms_dataset_with_group_progress(self, path, *, title="Open TDMS"):
-        tdms_file = TdmsFile.read(path)
-        groups = list(tdms_file.groups())
-        progress = QtWidgets.QProgressDialog("Opening TDMS groups...", "Cancel", 0, max(1, len(groups)), self)
+        progress = QtWidgets.QProgressDialog("Opening TDMS file...", "Cancel", 0, 1, self)
         progress.setWindowTitle(title)
         progress.setWindowModality(QtCore.Qt.WindowModal)
         progress.setMinimumDuration(0)
+        progress.setAutoClose(False)
+        progress.setAutoReset(False)
         progress.setValue(0)
+        QtWidgets.QApplication.processEvents()
+
+        tdms_file = TdmsFile.read(path)
+        groups = list(tdms_file.groups())
+        progress.setMaximum(max(1, len(groups)))
+        progress.setLabelText(f"Preparing TDMS groups...\n{path}")
+        QtWidgets.QApplication.processEvents()
 
         def on_group_loaded(index, total_groups, group_name):
             progress.setMaximum(max(1, total_groups))
@@ -1914,14 +1924,22 @@ class TdmsPlotter(QtWidgets.QMainWindow):
             )
         except RuntimeError as e:
             if str(e) == "TDMS import canceled." or progress.wasCanceled():
+                progress.setValue(progress.maximum())
                 progress.close()
+                QtWidgets.QApplication.processEvents()
+                progress.deleteLater()
                 self.statusBar().showMessage("Open TDMS canceled")
                 return False
+            progress.setValue(progress.maximum())
             progress.close()
+            QtWidgets.QApplication.processEvents()
+            progress.deleteLater()
             raise
         finally:
-            if progress.isVisible():
-                progress.close()
+            progress.setValue(progress.maximum())
+            progress.close()
+            QtWidgets.QApplication.processEvents()
+            progress.deleteLater()
 
         return dataset
 
@@ -2348,21 +2366,24 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         self._save_current_group_selection_for_name(self.current_group_name())
 
     def _save_current_group_selection_for_name(self, group_name):
-        selected_by_group = {g: [] for g in self.dataset.get_group_names()}
+        group_name = str(group_name).strip()
+        if not group_name or group_name not in self.dataset.groups:
+            return
+
+        selected_names = []
         for item in self.channel_list.selectedItems():
             if not self._is_channel_tree_item(item):
                 continue
             selected_group = self._channel_tree_group_name(item)
             channel_name = self._channel_tree_name(item)
-            if selected_group and channel_name:
-                selected_by_group.setdefault(selected_group, []).append(channel_name)
+            if selected_group == group_name and channel_name:
+                selected_names.append(channel_name)
 
-        for selected_group, selected_names in selected_by_group.items():
-            ordered_names = list(self.dataset.get_group(selected_group)["channels"].keys())
-            selected_set = set(selected_names)
-            self.group_selection_state[selected_group] = [
-                name for name in ordered_names if name in selected_set
-            ]
+        ordered_names = list(self.dataset.get_group(group_name)["channels"].keys())
+        selected_set = set(selected_names)
+        self.group_selection_state[group_name] = [
+            name for name in ordered_names if name in selected_set
+        ]
     def _capture_xy_pair_state(self):
         pair_state = []
         for pair in self.xy_pairs:
@@ -3461,6 +3482,77 @@ class TdmsPlotter(QtWidgets.QMainWindow):
             self.statusBar().showMessage(f"Created {len(new_names)} scaled channel(s)")
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Filter Error", str(e))
+
+    def filter_subtract_channels(self):
+        try:
+            group_name = self.current_group_name().strip()
+            group = self.current_group()
+            if not group_name or group_name not in self.dataset.groups:
+                QtWidgets.QMessageBox.information(self, "Filter", "No active group selected.")
+                return
+
+            channel_names = list(group["channels"].keys())
+            if len(channel_names) < 2:
+                QtWidgets.QMessageBox.information(self, "Filter", "At least two channels are required.")
+                return
+
+            dialog = QtWidgets.QDialog(self)
+            dialog.setWindowTitle("Subtract Channels")
+            dialog.resize(420, 140)
+
+            layout = QtWidgets.QVBoxLayout(dialog)
+
+            row_a = QtWidgets.QHBoxLayout()
+            row_a.addWidget(QtWidgets.QLabel("A:"))
+            combo_a = QtWidgets.QComboBox()
+            combo_a.addItems(channel_names)
+            row_a.addWidget(combo_a, 1)
+            layout.addLayout(row_a)
+
+            row_b = QtWidgets.QHBoxLayout()
+            row_b.addWidget(QtWidgets.QLabel("B:"))
+            combo_b = QtWidgets.QComboBox()
+            combo_b.addItems(channel_names)
+            if combo_b.count() > 1:
+                combo_b.setCurrentIndex(1)
+            row_b.addWidget(combo_b, 1)
+            layout.addLayout(row_b)
+
+            buttons = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
+            layout.addWidget(buttons)
+            buttons.accepted.connect(dialog.accept)
+            buttons.rejected.connect(dialog.reject)
+
+            if dialog.exec_() != QtWidgets.QDialog.Accepted:
+                return
+
+            channel_a = combo_a.currentText().strip()
+            channel_b = combo_b.currentText().strip()
+            if not channel_a or not channel_b:
+                return
+
+            data_a = group["channels"][channel_a]
+            data_b = group["channels"][channel_b]
+            x_a = np.asarray(data_a["x"], dtype=float)
+            x_b = np.asarray(data_b["x"], dtype=float)
+            y_a = np.asarray(data_a["y"], dtype=float)
+            y_b = np.asarray(data_b["y"], dtype=float)
+
+            if len(x_a) != len(x_b) or len(y_a) != len(y_b):
+                raise RuntimeError("Channels A and B must have the same number of samples.")
+            if not np.allclose(x_a, x_b, rtol=1e-9, atol=1e-12):
+                raise RuntimeError("Channels A and B must share the same time axis.")
+
+            self._push_undo_state(f"subtract channels {channel_a} - {channel_b}")
+            y_new = y_a - y_b
+            new_name = f"{channel_a}_minus_{channel_b}"
+            self._create_filtered_channel(channel_a, new_name, y_new)
+            self._refresh_channels_after_processing([new_name])
+            self.update_info_panel()
+            self.statusBar().showMessage(f"Created subtraction channel: {new_name}")
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Filter Error", str(e))
+
     def filter_subtract_mean(self):
         try:
             selected = self._selected_base_channel_names()
