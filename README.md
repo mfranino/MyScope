@@ -58,14 +58,17 @@ Supported input formats:
 - Right-click legend entries to set or reset channel line colors
 - Apply custom channel colors consistently to both the main plot and the band plot
 - Bottom plot for the active band range
+- Optional FFT view for the bottom plot using the `FFT` checkbox
 - Optional XY mode in the bottom plot
 - Dynamic XY pair count selector next to `XY plot`
 - Per-pair XY enable checkbox plus X/Y channel selectors
 - XY channel selectors can be auto-populated from the current plotted channel list order when XY mode is enabled
 - Manual band-plot axis controls for `X axis range` and `Y axis range` with `Apply`
+- In XY mode, the XY pair selector panel appears to the right of the bottom plot
 
 ### Band analysis
 - Enable or disable the analysis band
+- When the band is disabled, the lower band pane is hidden and the main plot expands vertically
 - Move and resize the band interactively on the main plot
 - Show band statistics for plotted channels
 - Display X1, X2, and dX band coordinates
@@ -189,13 +192,14 @@ The right panel also includes:
 - Main plot
 - Main plot axis range controls
 - Bottom band or XY plot
+- Bottom band pane uses:
+  - a horizontal splitter for plot vs. XY pair panel
+  - a fixed-height control row below
 
 ### Right panel
 - Band enable checkbox
 - Band coordinate label
-- XY controls and pair selectors
 - Band statistics table
-- Band axis range controls
 - Information box
 - Notes box
 - Memory usage label

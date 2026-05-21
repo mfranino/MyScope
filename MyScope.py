@@ -75,8 +75,8 @@ class CustomViewBox(pg.ViewBox):
     MODE_X = "x"
     MODE_Y = "y"
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self.mode = self.MODE_RECT
         self.setMouseMode(pg.ViewBox.PanMode)
 
@@ -968,6 +968,9 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         self.plotted_data = {}
         self.channel_plot_colors = {}
         self.legend_entry_targets = []
+        self.main_legend_visible = True
+        self.band_legend_visible = True
+        self._filter_channel_override = None
         self.undo_stack = []
         self.max_undo_steps = 20
         self.group_selection_state = {}
@@ -1097,18 +1100,14 @@ class TdmsPlotter(QtWidgets.QMainWindow):
 
 
         self.plot.clear()
-        self.legend = self.plot.addLegend()
-        self.legend.anchor((1, 0), (1, 0))
-        self.legend.setOffset((-10, 10))
+        self._reset_main_legend()
         self.plot.scene().sigMouseClicked.connect(self.on_plot_scene_mouse_clicked)
         self.plot.addItem(self.region)
         self.region.setRegion((0.0, 1.0))
         self.region.setVisible(True)
 
         self.band_plot.clear()
-        self.band_legend = self.band_plot.addLegend()
-        self.band_legend.anchor((1, 0), (1, 0))
-        self.band_legend.setOffset((-10, 10))
+        self._reset_band_legend()
         self.band_plot.setVisible(True)
 
         for idx, pair in enumerate(self.xy_pairs):
@@ -1188,7 +1187,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         left_widget = QtWidgets.QWidget()
         left_widget.setLayout(left)
 
-        self.viewbox = CustomViewBox()
+        self.viewbox = CustomViewBox(name="Main plot")
 
         plot_container = QtWidgets.QWidget()
         plot_layout = QtWidgets.QVBoxLayout(plot_container)
@@ -1202,9 +1201,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
             axis.setTextPen("k")
             axis.setPen("k")
 
-        self.legend = self.plot.addLegend()
-        self.legend.anchor((1, 0), (1, 0))
-        self.legend.setOffset((-10, 10))
+        self._reset_main_legend()
         self.plot.scene().sigMouseClicked.connect(self.on_plot_scene_mouse_clicked)
 
         self.region = pg.LinearRegionItem()
@@ -1244,7 +1241,8 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         main_axis_controls_layout.addWidget(self.main_axis_apply_button)
         main_axis_controls_layout.addStretch()
 
-        self.band_plot = pg.PlotWidget()
+        self.band_viewbox = pg.ViewBox(name="Band plot")
+        self.band_plot = pg.PlotWidget(viewBox=self.band_viewbox)
         self.band_plot.showGrid(x=True, y=True)
         self.band_plot.setBackground("w")
         self.band_plot.setMinimumHeight(180)
@@ -1255,9 +1253,8 @@ class TdmsPlotter(QtWidgets.QMainWindow):
             axis.setTextPen("k")
             axis.setPen("k")
 
-        self.band_legend = self.band_plot.addLegend()
-        self.band_legend.anchor((1, 0), (1, 0))
-        self.band_legend.setOffset((-10, 10))
+        self.band_plot.scene().sigMouseClicked.connect(self.on_band_plot_scene_mouse_clicked)
+        self._reset_band_legend()
 
         self.band_fft_checkbox = QtWidgets.QCheckBox("FFT")
         self.band_fft_checkbox.setObjectName("band_fft_checkbox")
@@ -1278,30 +1275,9 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         self.bottom_enable_autoscale_y_checkbox.setObjectName("bottom_enable_autoscale_y_checkbox")
 
         self.xy_pairs = []
-        band_bottom_widget = QtWidgets.QWidget()
-        band_bottom_layout = QtWidgets.QHBoxLayout(band_bottom_widget)
+        self.band_bottom_widget = QtWidgets.QWidget()
+        band_bottom_layout = QtWidgets.QVBoxLayout(self.band_bottom_widget)
         band_bottom_layout.setContentsMargins(0, 0, 0, 0)
-
-        xy_controls_widget = QtWidgets.QWidget()
-        xy_controls_layout = QtWidgets.QVBoxLayout(xy_controls_widget)
-        xy_controls_layout.setContentsMargins(4, 4, 4, 4)
-
-        top_controls_row = QtWidgets.QHBoxLayout()
-        top_controls_row.addWidget(self.band_fft_checkbox)
-        top_controls_row.addWidget(self.xy_mode_checkbox)
-        top_controls_row.addWidget(self.xy_pair_count_spin)
-        top_controls_row.addStretch()
-        top_controls_row.addWidget(self.bottom_autoscale_y_once_button)
-        top_controls_row.addWidget(self.bottom_enable_autoscale_y_checkbox)
-        xy_controls_layout.addLayout(top_controls_row)
-
-        self.xy_pairs_layout = QtWidgets.QVBoxLayout()
-        self.xy_pairs_layout.setContentsMargins(0, 0, 0, 0)
-        xy_controls_layout.addLayout(self.xy_pairs_layout)
-        self._set_xy_pair_count(self.xy_pair_count_spin.value())
-
-        x_axis_range_row = QtWidgets.QHBoxLayout()
-        y_axis_range_row = QtWidgets.QHBoxLayout()
         self.band_x_min_spin = QtWidgets.QDoubleSpinBox()
         self.band_x_max_spin = QtWidgets.QDoubleSpinBox()
         self.band_y_min_spin = QtWidgets.QDoubleSpinBox()
@@ -1320,29 +1296,63 @@ class TdmsPlotter(QtWidgets.QMainWindow):
             widget.setRange(-1e12, 1e12)
             widget.setMinimumWidth(42)
 
-        x_axis_range_row.addWidget(QtWidgets.QLabel("X axis range:"))
-        x_axis_range_row.addWidget(self.band_x_min_spin)
-        x_axis_range_row.addWidget(self.band_x_max_spin)
-        x_axis_range_row.addSpacing(self.band_axis_apply_button.sizeHint().width())
-        x_axis_range_row.addStretch()
-        xy_controls_layout.addLayout(x_axis_range_row)
+        self.band_left_widget = QtWidgets.QWidget()
+        band_left_layout = QtWidgets.QVBoxLayout(self.band_left_widget)
+        band_left_layout.setContentsMargins(0, 0, 0, 0)
+        band_left_layout.addWidget(self.band_plot)
 
-        y_axis_range_row.addWidget(QtWidgets.QLabel("Y axis range:"))
-        y_axis_range_row.addWidget(self.band_y_min_spin)
-        y_axis_range_row.addWidget(self.band_y_max_spin)
-        y_axis_range_row.addWidget(self.band_axis_apply_button)
-        y_axis_range_row.addStretch()
-        xy_controls_layout.addLayout(y_axis_range_row)
+        self.band_controls_widget = QtWidgets.QWidget()
+        band_controls_layout = QtWidgets.QVBoxLayout(self.band_controls_widget)
+        band_controls_layout.setContentsMargins(4, 4, 4, 4)
+        band_controls_layout.setSpacing(4)
+        self.band_controls_widget.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Fixed)
 
-        xy_controls_layout.addStretch()
-        self.xy_splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
-        self.xy_splitter.addWidget(self.band_plot)
-        self.xy_splitter.addWidget(xy_controls_widget)
-        self.xy_splitter.setSizes([800, 420])
-        self.xy_splitter.setChildrenCollapsible(False)
-        self.xy_splitter.setObjectName("xy_splitter")
+        controls_row = QtWidgets.QHBoxLayout()
+        controls_row.setContentsMargins(0, 0, 0, 0)
+        controls_row.addWidget(self.band_fft_checkbox)
+        controls_row.addWidget(self.xy_mode_checkbox)
+        controls_row.addWidget(self.xy_pair_count_spin)
+        controls_row.addSpacing(8)
+        controls_row.addWidget(self.bottom_autoscale_y_once_button)
+        controls_row.addWidget(self.bottom_enable_autoscale_y_checkbox)
+        controls_row.addSpacing(8)
+        controls_row.addWidget(QtWidgets.QLabel("X axis range:"))
+        controls_row.addWidget(self.band_x_min_spin)
+        controls_row.addWidget(self.band_x_max_spin)
+        controls_row.addSpacing(8)
+        controls_row.addWidget(QtWidgets.QLabel("Y axis range:"))
+        controls_row.addWidget(self.band_y_min_spin)
+        controls_row.addWidget(self.band_y_max_spin)
+        controls_row.addSpacing(8)
+        controls_row.addWidget(self.band_axis_apply_button)
+        controls_row.addStretch()
+        band_controls_layout.addLayout(controls_row)
 
-        band_bottom_layout.addWidget(self.xy_splitter)
+        self.xy_pairs_panel_widget = QtWidgets.QWidget()
+        xy_pairs_panel_layout = QtWidgets.QVBoxLayout(self.xy_pairs_panel_widget)
+        xy_pairs_panel_layout.setContentsMargins(4, 4, 4, 4)
+        xy_pairs_panel_layout.setSpacing(4)
+
+        self.xy_pairs_layout = QtWidgets.QVBoxLayout()
+        self.xy_pairs_layout.setContentsMargins(0, 0, 0, 0)
+        self.xy_pairs_layout.setSpacing(2)
+        xy_pairs_panel_layout.addLayout(self.xy_pairs_layout)
+        xy_pairs_panel_layout.addStretch()
+        self._set_xy_pair_count(self.xy_pair_count_spin.value())
+
+        self.band_xy_splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        self.band_xy_splitter.addWidget(self.band_left_widget)
+        self.band_xy_splitter.addWidget(self.xy_pairs_panel_widget)
+        self.band_xy_splitter.setSizes([900, 420])
+        self.band_xy_splitter.setChildrenCollapsible(False)
+        self.band_xy_splitter.setObjectName("band_xy_splitter")
+        self._last_xy_pairs_splitter_sizes = [900, 420]
+        self.band_xy_splitter.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+
+        band_bottom_layout.addWidget(self.band_xy_splitter)
+        band_bottom_layout.addWidget(self.band_controls_widget)
+        band_bottom_layout.setStretch(0, 1)
+        band_bottom_layout.setStretch(1, 0)
 
         main_plot_widget = QtWidgets.QWidget()
         main_plot_layout = QtWidgets.QVBoxLayout(main_plot_widget)
@@ -1352,10 +1362,11 @@ class TdmsPlotter(QtWidgets.QMainWindow):
 
         self.plot_splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
         self.plot_splitter.addWidget(main_plot_widget)
-        self.plot_splitter.addWidget(band_bottom_widget)
+        self.plot_splitter.addWidget(self.band_bottom_widget)
         self.plot_splitter.setSizes([720, 280])
         self.plot_splitter.setChildrenCollapsible(False)
         self.plot_splitter.setObjectName("plot_splitter")
+        self._last_band_enabled_splitter_sizes = [720, 280]
 
         plot_layout.addWidget(self.plot_splitter)
 
@@ -1694,6 +1705,51 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         x0, x1 = x_range
         self.band_plot.setXRange(x0, x1, padding=0)
 
+    def _reset_band_legend(self):
+        self.band_legend = self.band_plot.addLegend()
+        self.band_legend.anchor((1, 0), (1, 0))
+        self.band_legend.setOffset((-10, 10))
+        self.band_legend.setVisible(bool(self.band_legend_visible))
+
+    def _reset_main_legend(self):
+        self.legend = self.plot.addLegend()
+        self.legend.anchor((1, 0), (1, 0))
+        self.legend.setOffset((-10, 10))
+        self.legend.setVisible(bool(self.main_legend_visible))
+
+    def _show_viewbox_legend_menu(self, ev, plot_widget, legend_attr_name, visible_attr_name, status_prefix, action_prefix):
+        try:
+            menu = plot_widget.getViewBox().getMenu(ev)
+        except Exception:
+            menu = None
+        if menu is None:
+            return False
+
+        action_tag = f"_myscope_{action_prefix}_legend_action"
+        separator_tag = f"_myscope_{action_prefix}_legend_separator"
+        for action in list(menu.actions()):
+            if bool(action.property(action_tag)) or bool(action.property(separator_tag)):
+                menu.removeAction(action)
+
+        separator_action = menu.addSeparator()
+        separator_action.setProperty(separator_tag, True)
+        legend_visible = bool(getattr(self, visible_attr_name))
+        toggle_legend_action = menu.addAction("Hide legend" if legend_visible else "Show legend")
+        toggle_legend_action.setProperty(action_tag, True)
+        screen_pos = ev.screenPos()
+        global_pos = screen_pos.toPoint() if hasattr(screen_pos, "toPoint") else QtCore.QPoint(int(screen_pos.x()), int(screen_pos.y()))
+        action = menu.exec_(global_pos)
+        if action == toggle_legend_action:
+            new_visible = not legend_visible
+            setattr(self, visible_attr_name, new_visible)
+            legend = getattr(self, legend_attr_name, None)
+            if legend is not None:
+                legend.setVisible(new_visible)
+            self.statusBar().showMessage(f"{status_prefix} legend {'shown' if new_visible else 'hidden'}")
+            ev.accept()
+            return True
+        return False
+
     def _band_fft_enabled(self):
         try:
             ctrl = getattr(self.band_plot.plotItem, "ctrl", None)
@@ -1801,8 +1857,20 @@ class TdmsPlotter(QtWidgets.QMainWindow):
     def toggle_band(self, checked):
         try:
             enabled = bool(checked)
+            sizes = self.plot_splitter.sizes()
+            if enabled:
+                restore_sizes = list(getattr(self, "_last_band_enabled_splitter_sizes", [720, 280]))
+                self.band_bottom_widget.setVisible(True)
+                if len(restore_sizes) >= 2:
+                    self.plot_splitter.setSizes(restore_sizes[:2])
+            else:
+                if len(sizes) >= 2 and sizes[1] > 0:
+                    self._last_band_enabled_splitter_sizes = list(sizes[:2])
+                self.band_bottom_widget.setVisible(False)
+                self.plot_splitter.setSizes([1, 0])
             self.region.setVisible(enabled)
             self.band_plot.setVisible(enabled)
+            self.band_controls_widget.setVisible(enabled)
             self.xy_mode_checkbox.setEnabled(enabled)
             self.xy_pair_count_spin.setEnabled(enabled)
             self.bottom_autoscale_y_once_button.setEnabled(enabled)
@@ -1820,9 +1888,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
                 self.band_label.setText("Band disabled")
                 self.band_table.setRowCount(0)
                 self.band_plot.clear()
-                self.band_legend = self.band_plot.addLegend()
-                self.band_legend.anchor((1, 0), (1, 0))
-                self.band_legend.setOffset((-10, 10))
+                self._reset_band_legend()
                 self.statusBar().showMessage("Band disabled")
         except Exception as e:
             QtWidgets.QMessageBox.warning(self, "Band Error", str(e))
@@ -2459,8 +2525,22 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         return pair_state
 
     def _set_xy_pair_visibility(self, visible):
+        visible = bool(visible)
         for pair in self.xy_pairs:
-            pair["row_widget"].setVisible(bool(visible))
+            pair["row_widget"].setVisible(visible)
+        if not hasattr(self, "band_xy_splitter") or not hasattr(self, "xy_pairs_panel_widget"):
+            return
+        if visible:
+            restore_sizes = list(getattr(self, "_last_xy_pairs_splitter_sizes", [900, 420]))
+            self.xy_pairs_panel_widget.setVisible(True)
+            if len(restore_sizes) >= 2:
+                self.band_xy_splitter.setSizes(restore_sizes[:2])
+        else:
+            sizes = self.band_xy_splitter.sizes()
+            if len(sizes) >= 2 and sizes[1] > 0:
+                self._last_xy_pairs_splitter_sizes = list(sizes[:2])
+            self.xy_pairs_panel_widget.setVisible(False)
+            self.band_xy_splitter.setSizes([1, 0])
 
     def _create_xy_pair(self, index):
         row_widget = QtWidgets.QWidget()
@@ -2626,11 +2706,17 @@ class TdmsPlotter(QtWidgets.QMainWindow):
             return
         display_name = self._legend_display_name_at_scene_pos(ev.scenePos())
         if not display_name:
+            self._show_viewbox_legend_menu(ev, self.plot, "legend", "main_legend_visible", "Main", "main")
             return
         screen_pos = ev.screenPos()
         global_pos = screen_pos.toPoint() if hasattr(screen_pos, "toPoint") else QtCore.QPoint(int(screen_pos.x()), int(screen_pos.y()))
         self.show_plot_legend_context_menu(display_name, global_pos)
         ev.accept()
+
+    def on_band_plot_scene_mouse_clicked(self, ev):
+        if ev.button() != QtCore.Qt.RightButton:
+            return
+        self._show_viewbox_legend_menu(ev, self.band_plot, "band_legend", "band_legend_visible", "Band", "band")
 
     def show_plot_legend_context_menu(self, display_name, global_pos):
         display_name = str(display_name).strip()
@@ -2675,9 +2761,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         current_range = self.plot.getViewBox().viewRange() if preserve_view else None
         self.plot.clear()
 
-        self.legend = self.plot.addLegend()
-        self.legend.anchor((1, 0), (1, 0))
-        self.legend.setOffset((-10, 10))
+        self._reset_main_legend()
         self.legend_entry_targets = []
 
         self.plot.addItem(self.region)
@@ -2735,9 +2819,7 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         y_range_before = None if autoscale_y_enabled else self._preserve_band_plot_y_range()
 
         self.band_plot.clear()
-        self.band_legend = self.band_plot.addLegend()
-        self.band_legend.anchor((1, 0), (1, 0))
-        self.band_legend.setOffset((-10, 10))
+        self._reset_band_legend()
 
         if not self.band_checkbox.isChecked():
             self.band_plot.setVisible(False)
@@ -2923,6 +3005,12 @@ class TdmsPlotter(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.warning(self, "Band Error", str(e))
 
     def _selected_base_channel_names(self):
+        override = self._filter_channel_override
+        if isinstance(override, dict):
+            override_group = str(override.get("group", "")).strip()
+            override_channels = [str(name).strip() for name in override.get("channels", []) if str(name).strip()]
+            if override_group and override_channels and override_group == self.current_group_name().strip():
+                return override_channels
         names = []
         current_group = self.current_group_name().strip()
         for item in self.channel_list.selectedItems():
@@ -2935,9 +3023,36 @@ class TdmsPlotter(QtWidgets.QMainWindow):
                 names.append(channel_name)
         return names
 
+    def _run_filter_for_hovered_channel(self, group_name, channel_name, filter_func):
+        group_name = str(group_name).strip()
+        channel_name = str(channel_name).strip()
+        if not group_name or not channel_name:
+            return
+
+        previous_override = self._filter_channel_override
+        previous_group = self.current_group_name().strip()
+        try:
+            idx = self.group_combo.findText(group_name)
+            if idx >= 0 and idx != self.group_combo.currentIndex():
+                self.group_combo.setCurrentIndex(idx)
+            self._filter_channel_override = {"group": group_name, "channels": [channel_name]}
+            filter_func()
+        finally:
+            self._filter_channel_override = previous_override
+            if previous_group:
+                idx = self.group_combo.findText(previous_group)
+                if idx >= 0 and idx != self.group_combo.currentIndex():
+                    self.group_combo.setCurrentIndex(idx)
+
     def _refresh_channels_after_processing(self, new_channel_names):
         group_name = self.current_group_name()
-        self.group_selection_state[group_name] = list(new_channel_names)
+        ordered_names = list(self.current_group()["channels"].keys())
+        previous_selection = list(self.group_selection_state.get(group_name, []))
+        selected_set = set(previous_selection)
+        selected_set.update(str(name).strip() for name in new_channel_names if str(name).strip())
+        self.group_selection_state[group_name] = [
+            name for name in ordered_names if name in selected_set
+        ]
         self.populate_channels()
         self.refresh_group_channel_highlight()
         self.plot_channels(preserve_view=True)
@@ -3690,12 +3805,30 @@ class TdmsPlotter(QtWidgets.QMainWindow):
         move_down_action = menu.addAction("Move down")
         move_up_action.setEnabled(index > 0)
         move_down_action.setEnabled(index < len(channel_names) - 1)
+        filters_menu = menu.addMenu("Filters")
+        filter_actions = [
+            ("Moving Average...", self.filter_moving_average),
+            ("Low-pass...", self.filter_lowpass),
+            ("High-pass...", self.filter_highpass),
+            ("Band-pass...", self.filter_bandpass),
+            ("Band-pass (Stable SOS)...", self.filter_bandpass_sos),
+            ("Moving Window Pk-Pk...", self.filter_moving_window_pkpk),
+            ("Moving Window RMS...", self.filter_moving_window_rms),
+            ("Scale...", self.filter_scale_linear),
+            ("Subtract Mean", self.filter_subtract_mean),
+        ]
+        filter_action_map = {}
+        for label, func in filter_actions:
+            action_item = filters_menu.addAction(label)
+            filter_action_map[action_item] = func
         menu.addSeparator()
         rename_action = menu.addAction("Rename channel")
         delete_action = menu.addAction("Delete channel")
         action = menu.exec_(global_pos)
 
-        if action == move_up_action:
+        if action in filter_action_map:
+            self._run_filter_for_hovered_channel(group_name, channel_name, filter_action_map[action])
+        elif action == move_up_action:
             self.move_channel(item, -1)
         elif action == move_down_action:
             self.move_channel(item, 1)
